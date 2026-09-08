@@ -1,0 +1,19 @@
+1. Input Raw Volume: F0046_multichannel_cmle_ch03.tif
+2. Input Annotation: skeletons_connected_new.swc
+3. The SWCs has multiple trees that are fragmented trees which are parts of neurons.
+4. Create a separate scripts that will join these fragmented trees into a multiple sub-neuronal trees
+ 
+
+Steps to Join Trees:
+1. Divide the SWC file into multiple graphs based on the number of trees.
+2. For each tree, find the nearest neighbor node in the other trees.
+3. Connect the nearest neighbor nodes to form a joined tree, using the genrative model, based on the learned distribution.
+4. Extend the branch or end point, to the nearest neighbor node using the learned sequence
+5. Extend the end point to the end of the sequence in the volume 
+6. Insert branch points, using the learned distribution
+7. Use the Heuristic to accept or reject the joining of neighboring trees
+8. The final output should be a set of joined trees representing partial neurons, each tree is a combination of several fragmented trees.
+9. The Raw volume has intensity with noise and neurites, that follow a fluctuating intensity ridgeline.
+10. Accept the path if the path is within the close proximity of the intensity ridgeline along with the heuristic.
+
+Create separate modular scripts for these whole task

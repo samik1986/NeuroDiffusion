@@ -1,0 +1,6 @@
+__pycache__/
+venv/
+*.tif
+*.swc
+*.pth
+.DS_Store

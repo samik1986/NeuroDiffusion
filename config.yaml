@@ -1,0 +1,59 @@
+# NeuroDiffusion Configuration File
+
+# I/O Parameters
+data:
+  swc_dir: "C:/Users/banerjee/Desktop/Current Work/NeuroVLM/SWCs"
+  ignore_soma: true
+
+# DataLoader Parameters
+dataloader:
+  batch_size: 2
+  num_workers: 4
+  train_split: 0.8
+
+# Training Parameters
+training:
+  epochs: 100
+  learning_rate: 0.001
+  save_every: 1
+
+# Forward Diffusion Parameters
+forward_diffusion:
+  num_timesteps: 100
+  beta_start: 0.0001
+  beta_end: 0.02
+  schedule: "cosine"
+
+# Backward Diffusion (GNN) Parameters
+backward_diffusion:
+  hidden_dim: 128
+  num_layers: 4
+  num_heads: 4
+  learning_rate: 0.001
+  epochs: 100
+
+# Sequence Generation Parameters
+sequence_generation:
+  hidden_dim: 128
+  max_length: 50
+  temperature: 1.0
+
+# Loss Function Parameters
+loss_weights:
+  edge_bce: 1.0
+  coord_mse: 10.0
+  type_ce: 0.5
+
+# Heuristic Evaluator Parameters
+heuristic_evaluator:
+  hidden_dim: 128
+  lstm_layers: 2
+
+# Inference & Volume Parameters
+inference:
+  raw_volume_path: "F0046_multichannel_cmle_ch03.tif"
+  input_swc_path: "skeletons_connected_new.swc"
+  voxel_resolution: [0.1102, 0.1102, 0.5] # X, Y, Z in microns
+  max_joining_distance: 10.0 # maximum search radius in microns
+  ridgeline_percentile_threshold: 80 # accept path if mean intensity > 80th percentile
+

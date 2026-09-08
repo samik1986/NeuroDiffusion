@@ -1,0 +1,15 @@
+1. Input Folder : ../NeuroVLM/SWCs
+2. The SWCs needs to be trained based on a Diffusion model
+3. The Dataset is to be generated from theses SWCs. 
+4. The SWCs are single Neurons as vectors in CCFV3 space.
+5. Ignore the Somas
+6. Forward Diffusion: Add Noise in such a sense that the neurons are broken into trees in Random locations. 
+7. Backward Diffusion: Reconstruct the neurons from the noisy trees. 
+8. Learn the Function that allows removal of noise to join the fragmented trees into a single neuron.
+9. Learn a cost function that minimises the number of fragments to form a whole neuron, or a part of the neuron.
+10. The model must learn to create a heuristic whether two fragments must joined, generating from the endpoints, or branchpoints
+11. Three goals: a) Join two trees at the correct location, based on distribution, generated from the SWCs b) Join endpoints to endpoint, branchpoint to endpoint, endpoint to branchpoint c) Generate fragments sequences to predict next sequences, sampled fromm tehh distribution, to get to a endpoint, or extend fromm the endpoint or branchpoint.
+12. The whole data must be scale, rotation and translation invariant.
+13. The model must be able to generate the trees in 3D space. 
+14. Create Readme and algorithm highlighting each step, their mathematiocal or heuristic formulation; the  parameters and how to tune them, explaining the implications of chnaging teh values in teh parameters
+
