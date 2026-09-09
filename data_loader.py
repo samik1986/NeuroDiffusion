@@ -97,7 +97,39 @@ class NeuroDiffusionDataset(Dataset):
             
             features.append([dist, angle])
             
+        # 4. Extract a ground-truth path for sequence generation
+        import random
+        max_seq_len = 50
+        curr_id = random.choice(node_ids)
+        path_nodes = []
+        for _ in range(max_seq_len):
+            path_nodes.append(curr_id)
+            parent_id = nodes[curr_id]['parent']
+            if parent_id in nodes:
+                curr_id = parent_id
+            else:
+                break
+                
+        start_coord = nodes[path_nodes[0]]['coord']
+        path_coords = []
+        path_types = []
+        for n_id in path_nodes:
+            rel_coord = nodes[n_id]['coord'] - start_coord
+            if max_dim > 0:
+                rel_coord = rel_coord / max_dim
+            path_coords.append(rel_coord)
+            
+            # Map types to 0-2 for simplicity in this pipeline
+            # 0: continue, 1: branch, 2: terminate. For now, just dummy map
+            raw_type = nodes[n_id]['type']
+            t_mapped = 0 if raw_type == 2 else (1 if raw_type == 3 else 2)
+            path_types.append(t_mapped)
+            
+        path_coords_tensor = torch.tensor(np.array(path_coords), dtype=torch.float32)
+        path_types_tensor = torch.tensor(path_types, dtype=torch.long)
+        
         # Convert to tensors
+
         x = torch.tensor(normalized_coords, dtype=torch.float32)
         inv_features = torch.tensor(features, dtype=torch.float32)
         
@@ -117,7 +149,9 @@ class NeuroDiffusionDataset(Dataset):
             'inv_features': inv_features,
             'edge_index': edge_index,
             'centroid': torch.tensor(centroid, dtype=torch.float32),
-            'max_dim': float(max_dim)
+            'max_dim': float(max_dim),
+            'gt_coords': path_coords_tensor,
+            'gt_types': path_types_tensor
         }
 
     def __len__(self):
@@ -173,11 +207,28 @@ def custom_collate_fn(batch):
     else:
         edge_index_batch = torch.empty((2, 0), dtype=torch.long)
         
+    # Pad sequences
+    max_len = max([b['gt_coords'].shape[0] for b in batch])
+    B = len(batch)
+    
+    padded_coords = torch.zeros(B, max_len, 3, dtype=torch.float32)
+    padded_types = torch.zeros(B, max_len, dtype=torch.long)
+    padding_mask = torch.zeros(B, max_len, dtype=torch.bool)
+    
+    for i, b in enumerate(batch):
+        seq_len = b['gt_coords'].shape[0]
+        padded_coords[i, :seq_len] = b['gt_coords']
+        padded_types[i, :seq_len] = b['gt_types']
+        padding_mask[i, :seq_len] = True
+        
     return {
         'x': x_batch,
         'inv_features': inv_features_batch,
         'edge_index': edge_index_batch,
-        'batch': batch_idx
+        'batch': batch_idx,
+        'gt_coords': padded_coords,
+        'gt_types': padded_types,
+        'gt_mask': padding_mask
     }
 
 def get_dataloader(config):

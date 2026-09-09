@@ -117,7 +117,7 @@ class BackwardDiffusionModel(nn.Module):
         edge_pairs = torch.cat([src_nodes, dst_nodes], dim=-1)
         edge_logits = self.edge_head(edge_pairs).squeeze(-1)
         
-        return edge_logits
+        return edge_logits, out_flat
 
 if __name__ == '__main__':
     print("Testing Backward Diffusion Graph Transformer...")
@@ -140,6 +140,7 @@ if __name__ == '__main__':
     t = torch.tensor([25, 50], device=device)
     candidate_edges = torch.tensor([[0, 2, 5, 8], [1, 4, 6, 9]], device=device)
     
-    logits = model(x, inv_features, batch_idx, t, candidate_edges)
+    logits, context = model(x, inv_features, batch_idx, t, candidate_edges)
     print(f"Predicted Edge Logits Shape: {logits.shape}")
+    print(f"Context Embeddings Shape: {context.shape}")
     print(f"Logits output: {logits.detach().cpu().numpy()}")

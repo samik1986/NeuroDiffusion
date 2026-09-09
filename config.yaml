@@ -2,7 +2,7 @@
 
 # I/O Parameters
 data:
-  swc_dir: "C:/Users/banerjee/Desktop/Current Work/NeuroVLM/SWCs"
+  swc_dir: "/mnt/diskg9-3/NeuroGramLM/SWCs"
   ignore_soma: true
 
 # DataLoader Parameters
@@ -14,14 +14,15 @@ dataloader:
 # Training Parameters
 training:
   epochs: 100
-  learning_rate: 0.001
+  learning_rate: 0.0001
+  weight_decay: 0.0001
   save_every: 1
 
 # Forward Diffusion Parameters
 forward_diffusion:
   num_timesteps: 100
   beta_start: 0.0001
-  beta_end: 0.02
+  beta_end: 0.005
   schedule: "cosine"
 
 # Backward Diffusion (GNN) Parameters
@@ -29,7 +30,7 @@ backward_diffusion:
   hidden_dim: 128
   num_layers: 4
   num_heads: 4
-  learning_rate: 0.001
+  learning_rate: 0.0001
   epochs: 100
 
 # Sequence Generation Parameters
@@ -51,9 +52,15 @@ heuristic_evaluator:
 
 # Inference & Volume Parameters
 inference:
-  raw_volume_path: "F0046_multichannel_cmle_ch03.tif"
-  input_swc_path: "skeletons_connected_new.swc"
+  raw_volume_path: "/mnt/diskg9-3/NeuroGramLM/F0046_multichannel_cmle_ch03.tif"
+  input_swc_path: "/mnt/diskg9-3/NeuroGramLM/skeletons_connected_new.swc"
   voxel_resolution: [0.1102, 0.1102, 0.5] # X, Y, Z in microns
   max_joining_distance: 10.0 # maximum search radius in microns
-  ridgeline_percentile_threshold: 80 # accept path if mean intensity > 80th percentile
 
+# Output Parameters
+output:
+  base_dir: "output"
+  checkpoints_dir: "checkpoints"
+  validation_dir: "validation"
+  logs_dir: "logs"
+  images_dir: "corrupted_disjoint_trees"
