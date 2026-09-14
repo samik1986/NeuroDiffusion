@@ -33,6 +33,8 @@ class BackwardDiffusionModel(nn.Module):
             hidden_dim = bd_params.get('hidden_dim', hidden_dim)
             num_layers = bd_params.get('num_layers', num_layers)
             num_heads = bd_params.get('num_heads', num_heads)
+            laplacian_k = bd_params.get('laplacian_k', 8)
+            in_dim = 5 + laplacian_k
             
         self.node_mlp = nn.Linear(in_dim, hidden_dim)
         self.time_mlp = nn.Sequential(
@@ -135,7 +137,7 @@ if __name__ == '__main__':
     N = 10
     B = 2
     x = torch.rand(N, 3, device=device)
-    inv_features = torch.rand(N, 2, device=device)
+    inv_features = torch.rand(N, 2 + model.node_mlp.in_features - 5, device=device)
     batch_idx = torch.tensor([0,0,0,0,0, 1,1,1,1,1], device=device)
     t = torch.tensor([25, 50], device=device)
     candidate_edges = torch.tensor([[0, 2, 5, 8], [1, 4, 6, 9]], device=device)

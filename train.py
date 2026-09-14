@@ -1,6 +1,9 @@
 import os
 import torch
 import torch.optim as optim
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib
 matplotlib.use('Agg')
@@ -20,40 +23,121 @@ from trainers.generator_trainer import GeneratorTrainer
 from trainers.heuristic_trainer import HeuristicTrainer
 
 def plot_tree_corruption(x, original_edges, corrupted_edges, save_path):
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
+    fig = plt.figure(figsize=(20, 10))
     x_np = x.cpu().numpy()
     
-    # Plot nodes
-    ax.scatter(x_np[:, 0], x_np[:, 1], x_np[:, 2], c='black', s=5, alpha=0.5)
+    # --- Plot 1: Original Tree ---
+    ax1 = fig.add_subplot(121, projection='3d')
+    ax1.scatter(x_np[:, 0], x_np[:, 1], x_np[:, 2], c='black', s=5, alpha=0.5)
     
-    # Plot original edges (light grey)
     if original_edges.shape[1] > 0:
         orig_u, orig_v = original_edges.cpu().numpy()
         for i in range(len(orig_u)):
-            ax.plot([x_np[orig_u[i], 0], x_np[orig_v[i], 0]], 
-                    [x_np[orig_u[i], 1], x_np[orig_v[i], 1]], 
-                    [x_np[orig_u[i], 2], x_np[orig_v[i], 2]], 
-                    c='lightgrey', alpha=0.3, linewidth=1)
-                
+            ax1.plot([x_np[orig_u[i], 0], x_np[orig_v[i], 0]], 
+                     [x_np[orig_u[i], 1], x_np[orig_v[i], 1]], 
+                     [x_np[orig_u[i], 2], x_np[orig_v[i], 2]], 
+                     c='lightgrey', alpha=0.8, linewidth=1.5)
+    ax1.set_title("Original Neuronal Tree")
+    
+    # --- Plot 2: Corrupted Tree ---
+    ax2 = fig.add_subplot(122, projection='3d')
+    ax2.scatter(x_np[:, 0], x_np[:, 1], x_np[:, 2], c='black', s=5, alpha=0.5)
+    
+    # Plot original edges faintly in background
+    if original_edges.shape[1] > 0:
+        orig_u, orig_v = original_edges.cpu().numpy()
+        for i in range(len(orig_u)):
+            ax2.plot([x_np[orig_u[i], 0], x_np[orig_v[i], 0]], 
+                     [x_np[orig_u[i], 1], x_np[orig_v[i], 1]], 
+                     [x_np[orig_u[i], 2], x_np[orig_v[i], 2]], 
+                     c='lightgrey', alpha=0.2, linewidth=1)
+                     
     # Plot corrupted edges (red)
     if corrupted_edges.shape[1] > 0:
         corr_u, corr_v = corrupted_edges.cpu().numpy()
         for i in range(len(corr_u)):
-            ax.plot([x_np[corr_u[i], 0], x_np[corr_v[i], 0]], 
-                    [x_np[corr_u[i], 1], x_np[corr_v[i], 1]], 
-                    [x_np[corr_u[i], 2], x_np[corr_v[i], 2]], 
-                    c='red', linewidth=2)
-                    
-    ax.set_title("Forward Diffusion Tree Corruption")
+            ax2.plot([x_np[corr_u[i], 0], x_np[corr_v[i], 0]], 
+                     [x_np[corr_u[i], 1], x_np[corr_v[i], 1]], 
+                     [x_np[corr_u[i], 2], x_np[corr_v[i], 2]], 
+                     c='red', linewidth=2)
+                     
+    ax2.set_title("Forward Diffusion Tree Corruption")
     plt.savefig(save_path, bbox_inches='tight')
-    plt.close()
+    plt.close(fig)
 
-def train():
-    print("Starting Training Pipeline...")
+def plot_full_diffusion_process(x, true_edges, forward_diffusion, gen_model, t1_context, t2_context, save_path):
+    # 2 rows, 5 columns (t=0, 25, 50, 75, 99)
+    fig = plt.figure(figsize=(25, 10))
+    x_np = x.cpu().numpy()
     
-    config = load_config('config.yaml')
+    timesteps = [0, 24, 49, 74, 99]
+    
+    # ROW 1: Forward Diffusion (Edges)
+    for idx, t in enumerate(timesteps):
+        ax = fig.add_subplot(2, 5, idx + 1, projection='3d')
+        ax.scatter(x_np[:, 0], x_np[:, 1], x_np[:, 2], c='black', s=5, alpha=0.5)
+        
+        noisy_edges, _ = forward_diffusion.forward_sample(true_edges, t)
+        
+        if noisy_edges.shape[1] > 0:
+            corr_u, corr_v = noisy_edges.cpu().numpy()
+            for i in range(len(corr_u)):
+                ax.plot([x_np[corr_u[i], 0], x_np[corr_v[i], 0]], 
+                        [x_np[corr_u[i], 1], x_np[corr_v[i], 1]], 
+                        [x_np[corr_u[i], 2], x_np[corr_v[i], 2]], 
+                        c='red', linewidth=1)
+                        
+        ax.set_title(f"Forward (t={t})")
+        
+    # ROW 2: Backward Diffusion (Coordinates)
+    # We sample a sequence of length 20 just for visual proxy
+    if hasattr(gen_model, 'module'): gen_model.module.max_length = 20
+    else: gen_model.max_length = 20
+    final_coords, _, history = (gen_model.module if hasattr(gen_model, 'module') else gen_model).sample(t1_context[0:1], t2_context[0:1], num_timesteps=100)
+    
+    # history saves at 99, 75, 50, 25, 0 (reversed)
+    # so we reverse it again to match left-to-right (t=99 on left? No, t=99 is pure noise, we want t=99 on left to show generation)
+    # Wait, Forward goes t=0 -> 99 (clean -> noisy).
+    # Backward goes t=99 -> 0 (noisy -> clean).
+    
+    for idx, h in enumerate(history):
+        ax = fig.add_subplot(2, 5, 5 + idx + 1, projection='3d')
+        
+        # 1. Plot the original tree as faint background context
+        ax.scatter(x_np[:, 0], x_np[:, 1], x_np[:, 2], c='black', s=5, alpha=0.1)
+        if true_edges.shape[1] > 0:
+            orig_u, orig_v = true_edges.cpu().numpy()
+            for i in range(len(orig_u)):
+                ax.plot([x_np[orig_u[i], 0], x_np[orig_v[i], 0]], 
+                        [x_np[orig_u[i], 1], x_np[orig_v[i], 1]], 
+                        [x_np[orig_u[i], 2], x_np[orig_v[i], 2]], 
+                        c='lightgrey', alpha=0.1, linewidth=1)
+                        
+        # 2. Plot the generating sequence
+        gen_x = h['coords'][0].cpu().numpy()
+        ax.scatter(gen_x[:, 0], gen_x[:, 1], gen_x[:, 2], c='blue', s=20, alpha=0.8)
+        
+        # Connect the generated sequence path
+        for i in range(len(gen_x)-1):
+            ax.plot([gen_x[i, 0], gen_x[i+1, 0]], 
+                    [gen_x[i, 1], gen_x[i+1, 1]], 
+                    [gen_x[i, 2], gen_x[i+1, 2]], 
+                    c='blue', linewidth=2)
+                    
+        ax.set_title(f"Backward (t={h['t']})")
+        
+    plt.tight_layout()
+    plt.savefig(save_path, bbox_inches='tight')
+    plt.close(fig)
+
+def main_worker(rank, world_size, config):
+    print(f"Starting Training Pipeline on rank {rank}...")
+    
+    # Init DDP
+    dist.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=rank)
+    torch.cuda.set_device(rank)
+    device = torch.device(f'cuda:{rank}')
+    
     train_params = config.get('training', {})
     epochs = train_params.get('epochs', 100)
     lr = train_params.get('learning_rate', 0.0001)
@@ -67,18 +151,24 @@ def train():
     log_dir = os.path.join(base_dir, out_cfg.get('logs_dir', 'logs'))
     img_dir = os.path.join(base_dir, out_cfg.get('images_dir', 'corrupted_disjoint_trees'))
     
-    os.makedirs(ckpt_dir, exist_ok=True)
-    os.makedirs(val_dir, exist_ok=True)
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(img_dir, exist_ok=True)
-    tb_dir = os.path.join(base_dir, 'tensorboard')
-    os.makedirs(tb_dir, exist_ok=True)
-    writer = SummaryWriter(log_dir=tb_dir)
+    if rank == 0:
+        os.makedirs(ckpt_dir, exist_ok=True)
+        os.makedirs(val_dir, exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(img_dir, exist_ok=True)
+        tb_dir = os.path.join(base_dir, 'tensorboard')
+        os.makedirs(tb_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=tb_dir)
+    else:
+        writer = None
+        
+    # Make sure dirs are created before other ranks proceed
+    dist.barrier()
+
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
     
-    train_loader, val_loader = get_dataloader(config)
+    
+    train_loader, val_loader = get_dataloader(config, world_size, rank)
     if train_loader is None or val_loader is None:
         print("No data found in directory. Aborting.")
         return
@@ -89,6 +179,11 @@ def train():
     gen_model = SequenceGenerator(config=config).to(device)
     eval_model = ValidityHeuristicEvaluator(config=config).to(device)
     loss_module = NeuroDiffusionLoss(config=config).to(device)
+    # Wrap in DDP
+    diff_model = DDP(diff_model, device_ids=[rank], find_unused_parameters=False)
+    gen_model = DDP(gen_model, device_ids=[rank], find_unused_parameters=False)
+    eval_model = DDP(eval_model, device_ids=[rank], find_unused_parameters=False)
+    
     
     # Initialize optimizers & schedulers
     diff_opt = optim.AdamW(diff_model.parameters(), lr=lr, weight_decay=wd)
@@ -105,9 +200,11 @@ def train():
     gen_trainer = GeneratorTrainer(gen_model, gen_opt, gen_sch, loss_module, device)
     eval_trainer = HeuristicTrainer(eval_model, eval_opt, eval_sch, device)
     
-    print(f"Beginning co-training for {epochs} epochs...")
+    if rank == 0:
+        print(f"Beginning co-training for {epochs} epochs...")
     
     for epoch in range(epochs):
+        train_loader.sampler.set_epoch(epoch)
         diff_model.train()
         gen_model.train()
         eval_model.train()
@@ -117,7 +214,7 @@ def train():
         epoch_gen_type = 0.0
         epoch_eval_loss = 0.0
         
-        for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")):
+        for batch_idx, batch in enumerate(tqdm(train_loader, disable=(rank!=0), desc=f"Epoch {epoch+1}/{epochs} [Train]")):
             if batch is None:
                 continue
                 
@@ -137,9 +234,22 @@ def train():
             t_batch = torch.randint(0, forward_diffusion.num_timesteps, (1,), device=device)
             noisy_edge_index, keep_mask = forward_diffusion.forward_sample(true_edge_index, t_batch)
             
-            if batch_idx == 0:
-                save_path = os.path.join(img_dir, f"epoch_{epoch+1}_corruption.png")
-                plot_tree_corruption(x, true_edge_index, noisy_edge_index, save_path)
+            if batch_idx == 0 and rank == 0:
+                mask = (batch_assignment == 0)
+                node_indices = torch.where(mask)[0]
+                if len(node_indices) > 0:
+                    x_single = x[mask]
+                    edge_mask_orig = mask[true_edge_index[0]] & mask[true_edge_index[1]]
+                    true_edges_single = true_edge_index[:, edge_mask_orig]
+                    edge_mask_corr = mask[noisy_edge_index[0]] & mask[noisy_edge_index[1]]
+                    noisy_edges_single = noisy_edge_index[:, edge_mask_corr]
+                    mapping = torch.zeros(x.shape[0], dtype=torch.long, device=device)
+                    mapping[node_indices] = torch.arange(len(node_indices), device=device)
+                    true_edges_single = mapping[true_edges_single]
+                    noisy_edges_single = mapping[noisy_edges_single]
+                    
+                    save_path = os.path.join(img_dir, f"epoch_{epoch+1}_corruption.png")
+                    plot_tree_corruption(x_single, true_edges_single, noisy_edges_single, save_path)
             
             # --- 1. Train Backward Diffusion ---
             diff_loss, context_emb = diff_trainer.train_step(
@@ -149,26 +259,23 @@ def train():
             
             # Extract valid context (e.g. mean pooling per graph for simplicity of this architectural pipeline)
             # In a real scenario, this would be specific node pairs.
-            graph_context = []
-            for i in range(B):
-                mask = (batch_assignment == i)
-                if mask.any():
-                    graph_context.append(context_emb[mask].mean(dim=0))
-                else:
-                    graph_context.append(torch.zeros(context_emb.shape[-1], device=device))
-            graph_context = torch.stack(graph_context)
+            # Vectorized scatter mean for context extraction
+            counts = torch.bincount(batch_assignment, minlength=B).clamp(min=1).unsqueeze(1).float()
+            graph_context = torch.zeros(B, context_emb.size(1), device=device)
+            graph_context.scatter_add_(0, batch_assignment.unsqueeze(1).expand_as(context_emb), context_emb)
+            graph_context = graph_context / counts
             
-            # --- 2. Train Sequence Generator ---
+            # Use same graph context for T1 and T2 for dummy training (simulating pairwise generation)
+            t1_context = graph_context
+            t2_context = graph_context
+            
             coord_loss, type_loss, pred_coords, pred_types, gen_t = gen_trainer.train_step(
-                graph_context, gt_coords, gt_types, gt_mask, gt_mask
+                t1_context, t2_context, gt_coords, gt_types, gt_mask, gt_mask
             )
             epoch_gen_coord += coord_loss
             epoch_gen_type += type_loss
             
             # --- 3. Train Heuristic Evaluator ---
-            # Use same graph context for T1 and T2 for dummy training
-            t1_context = graph_context
-            t2_context = graph_context
             
             gt_types_one_hot = torch.nn.functional.one_hot(gt_types, num_classes=3).float()
             eval_loss = eval_trainer.train_step(
@@ -180,10 +287,14 @@ def train():
             epoch_eval_loss += eval_loss
             
             global_step = epoch * len(train_loader) + batch_idx
-            writer.add_scalar('Loss/Diffusion', diff_loss, global_step)
-            writer.add_scalar('Loss/Gen_Coord', coord_loss, global_step)
-            writer.add_scalar('Loss/Gen_Type', type_loss, global_step)
-            writer.add_scalar('Loss/Heuristic', eval_loss, global_step)
+            if rank == 0:
+                writer.add_scalar('Loss/Diffusion', diff_loss, global_step)
+            if rank == 0:
+                writer.add_scalar('Loss/Gen_Coord', coord_loss, global_step)
+            if rank == 0:
+                writer.add_scalar('Loss/Gen_Type', type_loss, global_step)
+            if rank == 0:
+                writer.add_scalar('Loss/Heuristic', eval_loss, global_step)
             
         diff_sch.step()
         gen_sch.step()
@@ -200,7 +311,7 @@ def train():
         val_eval_loss = 0.0
         
         with torch.no_grad():
-            for batch_idx, batch in enumerate(tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]")):
+            for batch_idx, batch in enumerate(tqdm(val_loader, disable=(rank!=0), desc=f"Epoch {epoch+1}/{epochs} [Val]")):
                 if batch is None:
                     continue
                     
@@ -219,27 +330,41 @@ def train():
                 B = int(batch_assignment.max().item() + 1)
                 t_batch = torch.randint(0, forward_diffusion.num_timesteps, (1,), device=device)
                 
-                if batch_idx == 0:
+                if batch_idx == 0 and rank == 0:
                     noisy_edge_index, _ = forward_diffusion.forward_sample(true_edge_index, t_batch)
-                    save_path = os.path.join(img_dir, f"epoch_{epoch+1}_val_corruption.png")
-                    plot_tree_corruption(x, true_edge_index, noisy_edge_index, save_path)
+                    
+                    mask = (batch_assignment == 0)
+                    node_indices = torch.where(mask)[0]
+                    if len(node_indices) > 0:
+                        x_single = x[mask]
+                        edge_mask_orig = mask[true_edge_index[0]] & mask[true_edge_index[1]]
+                        true_edges_single = true_edge_index[:, edge_mask_orig]
+                        edge_mask_corr = mask[noisy_edge_index[0]] & mask[noisy_edge_index[1]]
+                        noisy_edges_single = noisy_edge_index[:, edge_mask_corr]
+                        mapping = torch.zeros(x.shape[0], dtype=torch.long, device=device)
+                        mapping[node_indices] = torch.arange(len(node_indices), device=device)
+                        true_edges_single = mapping[true_edges_single]
+                        noisy_edges_single = mapping[noisy_edges_single]
+                        
+                        save_path = os.path.join(img_dir, f"epoch_{epoch+1}_val_corruption.png")
+                        plot_tree_corruption(x_single, true_edges_single, noisy_edges_single, save_path)
                     
                 diff_loss, context_emb = diff_trainer.val_step(
                     x, inv_features, batch_assignment, t_batch.expand(B), true_edge_index
                 )
                 val_diff_loss += diff_loss
                 
-                graph_context = []
-                for i in range(B):
-                    mask = (batch_assignment == i)
-                    if mask.any():
-                        graph_context.append(context_emb[mask].mean(dim=0))
-                    else:
-                        graph_context.append(torch.zeros(context_emb.shape[-1], device=device))
-                graph_context = torch.stack(graph_context)
+                counts = torch.bincount(batch_assignment, minlength=B).clamp(min=1).unsqueeze(1).float()
+                graph_context = torch.zeros(B, context_emb.size(1), device=device)
+                graph_context.scatter_add_(0, batch_assignment.unsqueeze(1).expand_as(context_emb), context_emb)
+                graph_context = graph_context / counts
+                
+                # Use same graph context for T1 and T2 for dummy training
+                t1_context = graph_context
+                t2_context = graph_context
                 
                 coord_loss, type_loss, pred_coords, pred_types, gen_t = gen_trainer.val_step(
-                    graph_context, gt_coords, gt_types, gt_mask, gt_mask
+                    t1_context, t2_context, gt_coords, gt_types, gt_mask, gt_mask
                 )
                 val_gen_coord += coord_loss
                 val_gen_type += type_loss
@@ -253,17 +378,41 @@ def train():
                 )
                 val_eval_loss += eval_loss
                 
-        writer.add_scalar('Val_Loss/Diffusion', val_diff_loss/max(len(val_loader), 1), epoch)
-        writer.add_scalar('Val_Loss/Gen_Coord', val_gen_coord/max(len(val_loader), 1), epoch)
-        writer.add_scalar('Val_Loss/Gen_Type', val_gen_type/max(len(val_loader), 1), epoch)
-        writer.add_scalar('Val_Loss/Heuristic', val_eval_loss/max(len(val_loader), 1), epoch)
+                # Plot full gradual process on the last batch of validation
+                if batch_idx == len(val_loader) - 1 and rank == 0:
+                    save_path_full = os.path.join(img_dir, f"epoch_{epoch+1}_full_diffusion.png")
+                    
+                    # Extract single graph for the forward corruption visualization
+                    mask = (batch_assignment == 0)
+                    node_indices = torch.where(mask)[0]
+                    if len(node_indices) > 0:
+                        x_single = x[mask]
+                        edge_mask_orig = mask[true_edge_index[0]] & mask[true_edge_index[1]]
+                        true_edges_single = true_edge_index[:, edge_mask_orig]
+                        mapping = torch.zeros(x.shape[0], dtype=torch.long, device=device)
+                        mapping[node_indices] = torch.arange(len(node_indices), device=device)
+                        true_edges_single = mapping[true_edges_single]
+                        
+                        plot_full_diffusion_process(
+                            x_single, true_edges_single, forward_diffusion, gen_model, 
+                            t1_context, t2_context, save_path_full
+                        )
+                
+        if rank == 0:
+            writer.add_scalar('Val_Loss/Diffusion', val_diff_loss/max(len(val_loader), 1), epoch)
+        if rank == 0:
+            writer.add_scalar('Val_Loss/Gen_Coord', val_gen_coord/max(len(val_loader), 1), epoch)
+        if rank == 0:
+            writer.add_scalar('Val_Loss/Gen_Type', val_gen_type/max(len(val_loader), 1), epoch)
+        if rank == 0:
+            writer.add_scalar('Val_Loss/Heuristic', val_eval_loss/max(len(val_loader), 1), epoch)
         
         print(f"==> Epoch [{epoch+1}/{epochs}] Diff: {epoch_diff_loss/len(train_loader):.4f} (Val {val_diff_loss/max(len(val_loader), 1):.4f}) | "
               f"GenC: {epoch_gen_coord/len(train_loader):.4f} (Val {val_gen_coord/max(len(val_loader), 1):.4f}) | "
               f"GenT: {epoch_gen_type/len(train_loader):.4f} (Val {val_gen_type/max(len(val_loader), 1):.4f}) | "
               f"Eval: {epoch_eval_loss/len(train_loader):.4f} (Val {val_eval_loss/max(len(val_loader), 1):.4f})")
         
-        if (epoch + 1) % save_every == 0:
+        if (epoch + 1) % save_every == 0 and rank == 0:
             torch.save(diff_model.state_dict(), os.path.join(ckpt_dir, f"diff_epoch_{epoch+1}.pth"))
             torch.save(gen_model.state_dict(), os.path.join(ckpt_dir, f"gen_epoch_{epoch+1}.pth"))
             torch.save(eval_model.state_dict(), os.path.join(ckpt_dir, f"eval_epoch_{epoch+1}.pth"))
@@ -271,5 +420,24 @@ def train():
             
     print("Training Complete!")
 
+
+
+def train():
+    import os
+    config = load_config('config.yaml')
+    world_size = torch.cuda.device_count()
+    
+    if world_size > 1:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        print(f"Spawning DDP across {world_size} GPUs...")
+        mp.spawn(main_worker, nprocs=world_size, args=(world_size, config))
+    else:
+        # Fallback to single process
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        main_worker(0, 1, config)
+        
 if __name__ == '__main__':
     train()
+

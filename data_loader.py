@@ -43,8 +43,14 @@ class SWCParser:
         return self.nodes, self.edges
 
 class NeuroDiffusionDataset(Dataset):
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, config=None):
         self.data_dir = data_dir
+        self.laplacian_k = config.get('backward_diffusion', {}).get('laplacian_k', 8) if config else 8
+        
+        dl_config = config.get('dataloader', {}) if config else {}
+        self.max_nodes = dl_config.get('max_nodes', 1000)
+        self.overlap = dl_config.get('overlap', 200)
+        
         self.swc_files = []
         for root, _, files in os.walk(data_dir):
             for file in files:
@@ -53,7 +59,7 @@ class NeuroDiffusionDataset(Dataset):
         
         print(f"Found {len(self.swc_files)} SWC files in {data_dir}...")
                 
-    def _process_graph(self, nodes, edges):
+    def _extract_features(self, nodes, edges):
         # 1. Translation Invariance: Center coordinates to centroid
         coords = np.array([node['coord'] for node in nodes.values()])
         centroid = np.mean(coords, axis=0)
@@ -61,6 +67,48 @@ class NeuroDiffusionDataset(Dataset):
         
         node_ids = list(nodes.keys())
         id_to_idx = {n_id: i for i, n_id in enumerate(node_ids)}
+        
+        k = self.laplacian_k
+        row, col = [], []
+        for u, v in edges:
+            if u in id_to_idx and v in id_to_idx:
+                row.append(id_to_idx[u])
+                col.append(id_to_idx[v])
+                row.append(id_to_idx[v])
+                col.append(id_to_idx[u])
+                
+        if len(row) > 0:
+            import scipy.sparse as sp
+            data = np.ones(len(row))
+            num_nodes = len(node_ids)
+            adj = sp.coo_matrix((data, (row, col)), shape=(num_nodes, num_nodes))
+            adj.sum_duplicates()
+            adj.data = np.ones_like(adj.data)
+            
+            d = np.array(adj.sum(1)).flatten()
+            # safe division
+            d_inv_sqrt = np.zeros_like(d)
+            mask = d > 0
+            d_inv_sqrt[mask] = np.power(d[mask], -0.5)
+            d_mat_inv_sqrt = sp.diags(d_inv_sqrt)
+            
+            norm_adj = d_mat_inv_sqrt.dot(adj).dot(d_mat_inv_sqrt)
+            laplacian = sp.eye(num_nodes) - norm_adj
+            
+            try:
+                eigvals, eigvecs = np.linalg.eigh(laplacian.toarray())
+                lap_pe = eigvecs[:, 1:k+1]
+            except Exception:
+                lap_pe = np.zeros((num_nodes, k))
+        else:
+            lap_pe = np.zeros((len(node_ids), k))
+            
+        if lap_pe.shape[1] < k:
+            pad = np.zeros((len(node_ids), k - lap_pe.shape[1]))
+            lap_pe = np.concatenate([lap_pe, pad], axis=1)
+        elif lap_pe.shape[1] > k:
+            lap_pe = lap_pe[:, :k]
+
         
         # 2. Scale Invariance: Normalize by max bounding box dimension
         max_dim = np.max(np.abs(centered_coords))
@@ -95,7 +143,7 @@ class NeuroDiffusionDataset(Dataset):
                         cos_theta = np.dot(vec_p_c, vec_gp_p) / (norm_p_c * norm_gp_p)
                         angle = np.arccos(np.clip(cos_theta, -1.0, 1.0))
             
-            features.append([dist, angle])
+            features.append([dist, angle] + lap_pe[i].tolist())
             
         # 4. Extract a ground-truth path for sequence generation
         import random
@@ -154,6 +202,52 @@ class NeuroDiffusionDataset(Dataset):
             'gt_types': path_types_tensor
         }
 
+    def _process_graph(self, nodes, edges):
+        MAX_NODES = self.max_nodes
+        OVERLAP = self.overlap
+        
+        if len(nodes) <= MAX_NODES:
+            return [self._extract_features(nodes, edges)]
+            
+        import random
+        import collections
+        
+        adj = collections.defaultdict(list)
+        for u, v in edges:
+            adj[u].append(v)
+            adj[v].append(u)
+            
+        uncovered = set(nodes.keys())
+        crops = []
+        
+        while uncovered:
+            start_node = random.choice(list(uncovered))
+            visited = set([start_node])
+            visited_list = [start_node]
+            queue = collections.deque([start_node])
+            
+            while queue and len(visited) < MAX_NODES:
+                curr = queue.popleft()
+                neighbors = list(adj[curr])
+                random.shuffle(neighbors)
+                for neighbor in neighbors:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        visited_list.append(neighbor)
+                        queue.append(neighbor)
+                        if len(visited) >= MAX_NODES:
+                            break
+                            
+            crop_nodes = {n: nodes[n] for n in visited}
+            crop_edges = [(u, v) for u, v in edges if u in visited and v in visited]
+            
+            crops.append(self._extract_features(crop_nodes, crop_edges))
+            
+            core_nodes = set(visited_list[:max(1, len(visited_list) - OVERLAP)])
+            uncovered = uncovered - core_nodes
+            
+        return crops
+
     def __len__(self):
         return len(self.swc_files)
 
@@ -171,10 +265,18 @@ class NeuroDiffusionDataset(Dataset):
 def custom_collate_fn(batch):
     """
     Batches multiple graphs into a single large disconnected graph (standard GNN batching).
+    Flattens any lists of overlapping crops returned by the dataset.
     """
-    # Filter out None values (failed parsing)
-    batch = [b for b in batch if b is not None]
-    if not batch:
+    # Flatten out crops
+    flat_batch = []
+    for b in batch:
+        if b is not None:
+            if isinstance(b, list):
+                flat_batch.extend(b)
+            else:
+                flat_batch.append(b)
+                
+    if not flat_batch:
         return None
 
     x_list = []
@@ -183,7 +285,7 @@ def custom_collate_fn(batch):
     batch_idx_list = []
     
     node_offset = 0
-    for i, graph in enumerate(batch):
+    for i, graph in enumerate(flat_batch):
         num_nodes = graph['x'].shape[0]
         
         x_list.append(graph['x'])
@@ -208,14 +310,14 @@ def custom_collate_fn(batch):
         edge_index_batch = torch.empty((2, 0), dtype=torch.long)
         
     # Pad sequences
-    max_len = max([b['gt_coords'].shape[0] for b in batch])
-    B = len(batch)
+    max_len = max([b['gt_coords'].shape[0] for b in flat_batch])
+    B = len(flat_batch)
     
     padded_coords = torch.zeros(B, max_len, 3, dtype=torch.float32)
     padded_types = torch.zeros(B, max_len, dtype=torch.long)
     padding_mask = torch.zeros(B, max_len, dtype=torch.bool)
     
-    for i, b in enumerate(batch):
+    for i, b in enumerate(flat_batch):
         seq_len = b['gt_coords'].shape[0]
         padded_coords[i, :seq_len] = b['gt_coords']
         padded_types[i, :seq_len] = b['gt_types']
@@ -231,16 +333,17 @@ def custom_collate_fn(batch):
         'gt_mask': padding_mask
     }
 
-def get_dataloader(config):
+def get_dataloader(config, world_size=1, rank=0):
     """
     Returns a train_loader and val_loader based on the config.
+    Supports DistributedDataParallel with world_size > 1.
     """
     dl_config = config.get('dataloader', {})
     batch_size = dl_config.get('batch_size', 2)
     num_workers = dl_config.get('num_workers', 4)
     train_split = dl_config.get('train_split', 0.8)
     
-    dataset = NeuroDiffusionDataset(config['data']['swc_dir'])
+    dataset = NeuroDiffusionDataset(config['data']['swc_dir'], config=config)
     
     total_len = len(dataset)
     if total_len == 0:
@@ -255,10 +358,22 @@ def get_dataloader(config):
         generator=torch.Generator().manual_seed(42)
     )
     
+    train_sampler = None
+    val_sampler = None
+    
+    if world_size > 1:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+        )
+        val_sampler = torch.utils.data.distributed.DistributedSampler(
+            val_dataset, num_replicas=world_size, rank=rank, shuffle=False
+        )
+        
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         collate_fn=custom_collate_fn,
         num_workers=num_workers,
         pin_memory=True
@@ -268,6 +383,7 @@ def get_dataloader(config):
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
+        sampler=val_sampler,
         collate_fn=custom_collate_fn,
         num_workers=num_workers,
         pin_memory=True
@@ -287,9 +403,9 @@ if __name__ == '__main__':
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             print(f"Using device: {device} for optimization")
             
-            dataloader = get_dataloader(config)
+            train_loader, val_loader = get_dataloader(config)
             
-            for batch in dataloader:
+            for batch in train_loader:
                 if batch is None: continue
                 
                 # Parallelization: Data loaded on CPU via num_workers, transferred to GPU seamlessly

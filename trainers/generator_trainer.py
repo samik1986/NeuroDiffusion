@@ -17,8 +17,8 @@ class GeneratorTrainer:
         self.alphas = 1.0 - self.betas
         self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
         
-    def train_step(self, context_embeddings, true_coords, true_types, coord_mask, type_mask):
-        B = context_embeddings.size(0)
+    def train_step(self, t1_context, t2_context, true_coords, true_types, coord_mask, type_mask):
+        B = t1_context.size(0)
         self.optimizer.zero_grad()
         
         t = torch.randint(0, self.num_timesteps, (B,), device=self.device).long()
@@ -27,7 +27,7 @@ class GeneratorTrainer:
         a_cp = self.alphas_cumprod[t].view(B, 1, 1)
         noisy_coords = torch.sqrt(a_cp) * true_coords + torch.sqrt(1 - a_cp) * noise
         
-        noise_pred, pred_types = self.model(noisy_coords, t, context_embeddings, padding_mask=coord_mask)
+        noise_pred, pred_types = self.model(noisy_coords, t, t1_context, t2_context, padding_mask=coord_mask)
         
         coord_loss = torch.tensor(0.0, device=self.device)
         if coord_mask.any():
@@ -51,10 +51,11 @@ class GeneratorTrainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
             
-        return coord_loss.item(), type_loss.item(), noisy_coords.detach(), pred_types.detach(), t
+        pred_x0 = (noisy_coords - torch.sqrt(1 - a_cp) * noise_pred) / torch.sqrt(a_cp)
+        return coord_loss.item(), type_loss.item(), pred_x0.detach(), torch.softmax(pred_types.detach(), dim=-1), t
 
-    def val_step(self, context_embeddings, true_coords, true_types, coord_mask, type_mask):
-        B = context_embeddings.size(0)
+    def val_step(self, t1_context, t2_context, true_coords, true_types, coord_mask, type_mask):
+        B = t1_context.size(0)
         
         t = torch.randint(0, self.num_timesteps, (B,), device=self.device).long()
         noise = torch.randn_like(true_coords)
@@ -62,7 +63,7 @@ class GeneratorTrainer:
         a_cp = self.alphas_cumprod[t].view(B, 1, 1)
         noisy_coords = torch.sqrt(a_cp) * true_coords + torch.sqrt(1 - a_cp) * noise
         
-        noise_pred, pred_types = self.model(noisy_coords, t, context_embeddings, padding_mask=coord_mask)
+        noise_pred, pred_types = self.model(noisy_coords, t, t1_context, t2_context, padding_mask=coord_mask)
         
         coord_loss = torch.tensor(0.0, device=self.device)
         if coord_mask.any():
@@ -79,4 +80,5 @@ class GeneratorTrainer:
             masked_type_loss = raw_type_loss * flat_mask.float()
             type_loss = masked_type_loss.sum() / flat_mask.sum().clamp(min=1)
             
-        return coord_loss.item(), type_loss.item(), noisy_coords.detach(), pred_types.detach(), t
+        pred_x0 = (noisy_coords - torch.sqrt(1 - a_cp) * noise_pred) / torch.sqrt(a_cp)
+        return coord_loss.item(), type_loss.item(), pred_x0.detach(), torch.softmax(pred_types.detach(), dim=-1), t
