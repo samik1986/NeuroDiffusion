@@ -7,8 +7,9 @@ class DiffusionTrainer:
         self.scheduler = scheduler
         self.loss_fn = loss_fn
         self.device = device
+        self.scaler = torch.amp.GradScaler('cuda')
         
-    def train_step(self, x, inv_features, batch_assignment, t_expanded, true_edge_index):
+    def train_step(self, x, noisy_edge_index, batch_assignment, t_expanded, true_edge_index):
         self.optimizer.zero_grad()
         
         # Generate negative samples for balanced loss
@@ -16,8 +17,16 @@ class DiffusionTrainer:
         num_pos = true_edge_index.shape[1]
         
         if num_pos > 0:
+            # Intra-batch negative sampling
+            counts = torch.bincount(batch_assignment)
+            cum_counts = torch.cat([torch.zeros(1, dtype=torch.long, device=self.device), torch.cumsum(counts, dim=0)])
+            
             neg_u = torch.randint(0, x.shape[0], (num_pos,), device=self.device)
-            neg_v = torch.randint(0, x.shape[0], (num_pos,), device=self.device)
+            b = batch_assignment[neg_u]
+            
+            v_offset = (torch.rand(num_pos, device=self.device) * counts[b]).long()
+            neg_v = cum_counts[b] + v_offset
+            
             neg_edge_index = torch.stack([neg_u, neg_v], dim=0)
             
             candidate_edges = torch.cat([true_edge_index, neg_edge_index], dim=1)
@@ -26,25 +35,36 @@ class DiffusionTrainer:
             candidate_edges = true_edge_index
             true_edge_labels = torch.ones(0, device=self.device)
             
-        edge_logits, out_flat = self.model(x, inv_features, batch_assignment, t_expanded, candidate_edges)
-        
-        edge_loss = torch.tensor(0.0, device=self.device)
-        if len(edge_logits) > 0:
-            edge_loss = self.loss_fn.edge_loss_fn(edge_logits, true_edge_labels.float())
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            edge_logits, out_flat = self.model(x, noisy_edge_index, batch_assignment, t_expanded, candidate_edges)
             
-        (self.loss_fn.edge_weight * edge_loss).backward()
+            edge_loss = torch.tensor(0.0, device=self.device)
+            if len(edge_logits) > 0:
+                edge_loss = self.loss_fn.edge_loss_fn(edge_logits, true_edge_labels.float())
+            
+            loss = self.loss_fn.edge_weight * edge_loss
+            
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-        self.optimizer.step()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
         
         return edge_loss.item(), out_flat.detach()
         
-    def val_step(self, x, inv_features, batch_assignment, t_expanded, true_edge_index):
+    def val_step(self, x, noisy_edge_index, batch_assignment, t_expanded, true_edge_index):
         B = int(batch_assignment.max().item() + 1)
         num_pos = true_edge_index.shape[1]
         
         if num_pos > 0:
+            counts = torch.bincount(batch_assignment)
+            cum_counts = torch.cat([torch.zeros(1, dtype=torch.long, device=self.device), torch.cumsum(counts, dim=0)])
+            
             neg_u = torch.randint(0, x.shape[0], (num_pos,), device=self.device)
-            neg_v = torch.randint(0, x.shape[0], (num_pos,), device=self.device)
+            b = batch_assignment[neg_u]
+            v_offset = (torch.rand(num_pos, device=self.device) * counts[b]).long()
+            neg_v = cum_counts[b] + v_offset
+            
             neg_edge_index = torch.stack([neg_u, neg_v], dim=0)
             
             candidate_edges = torch.cat([true_edge_index, neg_edge_index], dim=1)
@@ -53,10 +73,11 @@ class DiffusionTrainer:
             candidate_edges = true_edge_index
             true_edge_labels = torch.ones(0, device=self.device)
             
-        edge_logits, out_flat = self.model(x, inv_features, batch_assignment, t_expanded, candidate_edges)
-        
-        edge_loss = torch.tensor(0.0, device=self.device)
-        if len(edge_logits) > 0:
-            edge_loss = self.loss_fn.edge_loss_fn(edge_logits, true_edge_labels.float())
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            edge_logits, out_flat = self.model(x, noisy_edge_index, batch_assignment, t_expanded, candidate_edges)
             
-        return edge_loss.item(), out_flat.detach()
+            edge_loss = torch.tensor(0.0, device=self.device)
+            if len(edge_logits) > 0:
+                edge_loss = self.loss_fn.edge_loss_fn(edge_logits, true_edge_labels.float())
+            
+        return edge_loss.item(), out_flat.detach(), candidate_edges, edge_logits.detach() if len(edge_logits) > 0 else edge_logits

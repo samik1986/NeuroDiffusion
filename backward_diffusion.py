@@ -33,8 +33,7 @@ class BackwardDiffusionModel(nn.Module):
             hidden_dim = bd_params.get('hidden_dim', hidden_dim)
             num_layers = bd_params.get('num_layers', num_layers)
             num_heads = bd_params.get('num_heads', num_heads)
-            laplacian_k = bd_params.get('laplacian_k', 8)
-            in_dim = 5 + laplacian_k
+            in_dim = 3
             
         self.node_mlp = nn.Linear(in_dim, hidden_dim)
         self.time_mlp = nn.Sequential(
@@ -60,11 +59,11 @@ class BackwardDiffusionModel(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, x, inv_features, batch_idx, t, candidate_edges):
+    def forward(self, x, noisy_edge_index, batch_idx, t, candidate_edges):
         """
         Args:
             x: (N, 3) coordinates
-            inv_features: (N, 2) invariant features
+            noisy_edge_index: (2, E) sparse edges representing the fragmented graph
             batch_idx: (N,) graph assignments
             t: (B,) timesteps
             candidate_edges: (2, E_cand) edge pairs to evaluate
@@ -74,43 +73,44 @@ class BackwardDiffusionModel(nn.Module):
         """
         device = x.device
         
-        node_feats = torch.cat([x, inv_features], dim=-1)
-        h = self.node_mlp(node_feats)
+        h = self.node_mlp(x)
+        
+        # PyTorch Message Passing (Simple Graph Convolution) over the fragmented topology
+        if noisy_edge_index.shape[1] > 0:
+            src, dst = noisy_edge_index
+            messages = h[src]
+            aggr = torch.zeros_like(h)
+            aggr.scatter_add_(0, dst.unsqueeze(1).expand_as(messages), messages)
+            # Add self-loops / residual connection
+            h = h + aggr
         
         t_emb = self.time_mlp(t)
         h = h + t_emb[batch_idx]
         
         # Pad graphs for batched Transformer execution
-        unique_batches = torch.unique(batch_idx)
-        B = len(unique_batches)
+        B = int(batch_idx.max().item() + 1) if len(batch_idx) > 0 else 0
         
-        node_counts = [(batch_idx == i).sum().item() for i in range(B)]
-        max_nodes = max(node_counts) if node_counts else 0
+        counts = torch.bincount(batch_idx, minlength=B)
+        max_nodes = counts.max().item() if len(counts) > 0 else 0
         
         if max_nodes == 0:
             return torch.zeros(candidate_edges.shape[1], device=device)
             
-        padded_h = torch.zeros(B, max_nodes, h.size(-1), device=device)
+        padded_h = torch.zeros(B, max_nodes, h.size(-1), device=device, dtype=h.dtype)
         padding_mask = torch.ones(B, max_nodes, dtype=torch.bool, device=device)
         
-        # Manual flat to padded assignment
-        flat_to_padded_idx = {}
-        curr_idx = 0
-        for i in range(B):
-            n_nodes = node_counts[i]
-            padded_h[i, :n_nodes] = h[curr_idx:curr_idx+n_nodes]
-            padding_mask[i, :n_nodes] = False
-            for j in range(n_nodes):
-                flat_to_padded_idx[curr_idx + j] = (i, j)
-            curr_idx += n_nodes
+        # Fast vectorized flat to padded assignment
+        cum_counts = torch.cat([torch.zeros(1, dtype=torch.long, device=device), torch.cumsum(counts, dim=0)])
+        seq_i = torch.arange(len(batch_idx), device=device) - cum_counts[batch_idx]
+        
+        padded_h[batch_idx, seq_i] = h
+        padding_mask[batch_idx, seq_i] = False
             
         # Global self-attention to exchange context between fragments
         out_padded = self.transformer(padded_h, src_key_padding_mask=padding_mask)
         
-        # Retrieve flat features
-        out_flat = torch.zeros_like(h)
-        for flat_i, (b_i, seq_i) in flat_to_padded_idx.items():
-            out_flat[flat_i] = out_padded[b_i, seq_i]
+        # Fast vectorized retrieve flat features
+        out_flat = out_padded[batch_idx, seq_i]
             
         # Predict candidate edge logits
         src_nodes = out_flat[candidate_edges[0]]
@@ -137,12 +137,12 @@ if __name__ == '__main__':
     N = 10
     B = 2
     x = torch.rand(N, 3, device=device)
-    inv_features = torch.rand(N, 2 + model.node_mlp.in_features - 5, device=device)
+    noisy_edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]], device=device)
     batch_idx = torch.tensor([0,0,0,0,0, 1,1,1,1,1], device=device)
     t = torch.tensor([25, 50], device=device)
     candidate_edges = torch.tensor([[0, 2, 5, 8], [1, 4, 6, 9]], device=device)
     
-    logits, context = model(x, inv_features, batch_idx, t, candidate_edges)
+    logits, context = model(x, noisy_edge_index, batch_idx, t, candidate_edges)
     print(f"Predicted Edge Logits Shape: {logits.shape}")
     print(f"Context Embeddings Shape: {context.shape}")
     print(f"Logits output: {logits.detach().cpu().numpy()}")

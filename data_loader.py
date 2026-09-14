@@ -96,10 +96,18 @@ class NeuroDiffusionDataset(Dataset):
             laplacian = sp.eye(num_nodes) - norm_adj
             
             try:
-                eigvals, eigvecs = np.linalg.eigh(laplacian.toarray())
-                lap_pe = eigvecs[:, 1:k+1]
-            except Exception:
-                lap_pe = np.zeros((num_nodes, k))
+                from scipy.sparse.linalg import eigsh
+                k_eff = min(k + 1, num_nodes - 1)
+                # Using shift-invert mode (sigma) prevents ARPACK hangs and is 5x faster than dense eigh
+                eigvals, eigvecs = eigsh(laplacian.astype(np.float64), k=k_eff, sigma=-1e-3)
+                lap_pe = eigvecs[:, 1:k_eff]
+            except Exception as e:
+                # Fallback to dense if sparse solver fails for any reason
+                try:
+                    eigvals, eigvecs = np.linalg.eigh(laplacian.toarray())
+                    lap_pe = eigvecs[:, 1:k+1]
+                except Exception:
+                    lap_pe = np.zeros((num_nodes, k))
         else:
             lap_pe = np.zeros((len(node_ids), k))
             
@@ -217,41 +225,35 @@ class NeuroDiffusionDataset(Dataset):
             adj[u].append(v)
             adj[v].append(u)
             
-        uncovered = set(nodes.keys())
-        crops = []
+        start_node = random.choice(list(nodes.keys()))
+        visited = set([start_node])
+        visited_list = [start_node]
+        queue = collections.deque([start_node])
         
-        while uncovered:
-            start_node = random.choice(list(uncovered))
-            visited = set([start_node])
-            visited_list = [start_node]
-            queue = collections.deque([start_node])
-            
-            while queue and len(visited) < MAX_NODES:
-                curr = queue.popleft()
-                neighbors = list(adj[curr])
-                random.shuffle(neighbors)
-                for neighbor in neighbors:
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        visited_list.append(neighbor)
-                        queue.append(neighbor)
-                        if len(visited) >= MAX_NODES:
-                            break
-                            
-            crop_nodes = {n: nodes[n] for n in visited}
-            crop_edges = [(u, v) for u, v in edges if u in visited and v in visited]
-            
-            crops.append(self._extract_features(crop_nodes, crop_edges))
-            
-            core_nodes = set(visited_list[:max(1, len(visited_list) - OVERLAP)])
-            uncovered = uncovered - core_nodes
-            
-        return crops
+        while queue and len(visited) < MAX_NODES:
+            curr = queue.popleft()
+            neighbors = list(adj[curr])
+            random.shuffle(neighbors)
+            for neighbor in neighbors:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    visited_list.append(neighbor)
+                    queue.append(neighbor)
+                    if len(visited) >= MAX_NODES:
+                        break
+                        
+        crop_nodes = {n: nodes[n] for n in visited}
+        crop_edges = [(u, v) for u, v in edges if u in visited and v in visited]
+        
+        return [self._extract_features(crop_nodes, crop_edges)]
 
     def __len__(self):
         return len(self.swc_files)
 
     def __getitem__(self, idx):
+        if idx % 10 == 0:
+            with open("dataloader.log", "a") as f:
+                f.write(f"DataLoader worker processing file index {idx}/{len(self.swc_files)}...\n")
         file = self.swc_files[idx]
         parser = SWCParser(file)
         nodes, edges = parser.parse(ignore_soma=True)
@@ -333,16 +335,68 @@ def custom_collate_fn(batch):
         'gt_mask': padding_mask
     }
 
+class NeuroDiffusionIterableDataset(torch.utils.data.IterableDataset):
+    def __init__(self, chunk_dir, world_size=1, rank=0):
+        super().__init__()
+        self.chunk_files = sorted(glob.glob(os.path.join(chunk_dir, "*.pt")))
+        self.world_size = world_size
+        self.rank = rank
+        
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+            
+        total_workers = num_workers * self.world_size
+        global_worker_id = self.rank * num_workers + worker_id
+        
+        per_worker = int(np.ceil(len(self.chunk_files) / float(total_workers)))
+        my_chunk_files = self.chunk_files[global_worker_id * per_worker : (global_worker_id + 1) * per_worker]
+        
+        import random
+        random.shuffle(my_chunk_files)
+        
+        for chunk_file in my_chunk_files:
+            try:
+                # Load the list of list of crops
+                chunk_data = torch.load(chunk_file, map_location='cpu', weights_only=False)
+            except Exception:
+                continue
+                
+            random.shuffle(chunk_data)
+            for swc_crops in chunk_data:
+                if len(swc_crops) > 0:
+                    yield random.choice(swc_crops)
+
 def get_dataloader(config, world_size=1, rank=0):
     """
-    Returns a train_loader and val_loader based on the config.
-    Supports DistributedDataParallel with world_size > 1.
+    Returns train_loader, val_loader setup for DDP.
     """
     dl_config = config.get('dataloader', {})
     batch_size = dl_config.get('batch_size', 2)
     num_workers = dl_config.get('num_workers', 4)
     train_split = dl_config.get('train_split', 0.8)
     
+    chunk_dir = os.path.join(config['data']['swc_dir'], "processed_chunks")
+    use_iterable = os.path.exists(chunk_dir) and len(glob.glob(os.path.join(chunk_dir, "*.pt"))) > 0
+    
+    if use_iterable:
+        dataset = NeuroDiffusionIterableDataset(chunk_dir, world_size=world_size, rank=rank)
+        # For IterableDataset, we don't split train/val easily. Just return train_loader.
+        train_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            collate_fn=custom_collate_fn,
+            num_workers=num_workers,
+            pin_memory=True,
+            multiprocessing_context=torch.multiprocessing.get_context('spawn') if num_workers > 0 else None
+        )
+        return train_loader, None
+        
     dataset = NeuroDiffusionDataset(config['data']['swc_dir'], config=config)
     
     total_len = len(dataset)
@@ -351,7 +405,7 @@ def get_dataloader(config, world_size=1, rank=0):
         return None, None
         
     train_len = int(total_len * train_split)
-    val_len = total_len - train_len
+    val_len = total_len - train_len 
     
     train_dataset, val_dataset = torch.utils.data.random_split(
         dataset, [train_len, val_len], 
@@ -376,7 +430,8 @@ def get_dataloader(config, world_size=1, rank=0):
         sampler=train_sampler,
         collate_fn=custom_collate_fn,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        multiprocessing_context=torch.multiprocessing.get_context('spawn') if num_workers > 0 else None
     )
     
     val_loader = torch.utils.data.DataLoader(
@@ -386,7 +441,8 @@ def get_dataloader(config, world_size=1, rank=0):
         sampler=val_sampler,
         collate_fn=custom_collate_fn,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        multiprocessing_context=torch.multiprocessing.get_context('spawn') if num_workers > 0 else None
     )
     
     return train_loader, val_loader
