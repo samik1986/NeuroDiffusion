@@ -119,8 +119,8 @@ def plot_full_diffusion_process(x, true_edges, forward_diffusion, gen_model, t1_
     fig = plt.figure(figsize=(25, 10))
     x_np = x.cpu().numpy()
     
-    timesteps = [0, 24, 49, 74, 99]
-    
+    T = forward_diffusion.num_timesteps
+    timesteps = torch.linspace(0, T - 1, min(5, T)).long().tolist()
     # ROW 1: Forward Diffusion (Edges)
     for idx, t in enumerate(timesteps):
         ax = fig.add_subplot(2, 5, idx + 1, projection='3d')
@@ -294,8 +294,9 @@ def main_worker(rank, world_size, config):
                     plot_tree_corruption(x_single, true_edges_single, noisy_edges_single, save_path)
             
             # --- 1. Train Backward Diffusion ---
+            dropped_edges = true_edge_index[:, ~keep_mask] if true_edge_index.shape[1] > 0 else true_edge_index
             diff_loss, context_emb = diff_trainer.train_step(
-                x, noisy_edge_index, batch_assignment, t_batch.expand(B), true_edge_index
+                x, noisy_edge_index, batch_assignment, t_batch.expand(B), dropped_edges
             )
             epoch_diff_loss += diff_loss
             
@@ -376,7 +377,7 @@ def main_worker(rank, world_size, config):
                 B = int(batch_assignment.max().item() + 1)
                 t_batch = torch.randint(0, forward_diffusion.num_timesteps, (1,), device=device)
                 
-                noisy_edge_index, _ = forward_diffusion.forward_sample(true_edge_index, t_batch)
+                noisy_edge_index, keep_mask = forward_diffusion.forward_sample(true_edge_index, t_batch)
                 
                 if batch_idx == 0 and rank == 0:
                     
@@ -396,8 +397,9 @@ def main_worker(rank, world_size, config):
                         save_path = os.path.join(img_dir, f"epoch_{epoch+1}_val_corruption.png")
                         plot_tree_corruption(x_single, true_edges_single, noisy_edges_single, save_path)
                     
+                dropped_edges = true_edge_index[:, ~keep_mask] if true_edge_index.shape[1] > 0 else true_edge_index
                 diff_loss, context_emb, cand_edges, edge_logits = diff_trainer.val_step(
-                    x, noisy_edge_index, batch_assignment, t_batch.expand(B), true_edge_index
+                    x, noisy_edge_index, batch_assignment, t_batch.expand(B), dropped_edges
                 )
                 val_diff_loss += diff_loss
                 

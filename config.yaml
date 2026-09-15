@@ -22,10 +22,10 @@ training:
 
 # Forward Diffusion Parameters
 forward_diffusion:
-  num_timesteps: 100
+  num_timesteps: 10
   beta_start: 0.0001
-  beta_end: 0.005
-  schedule: "cosine"
+  beta_end: 0.2
+  schedule: "linear"
 
 # Backward Diffusion (GNN) Parameters
 backward_diffusion:

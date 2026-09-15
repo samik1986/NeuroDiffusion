@@ -9,12 +9,12 @@ class DiffusionTrainer:
         self.device = device
         self.scaler = torch.amp.GradScaler('cuda')
         
-    def train_step(self, x, noisy_edge_index, batch_assignment, t_expanded, true_edge_index):
+    def train_step(self, x, noisy_edge_index, batch_assignment, t_expanded, positive_edges):
         self.optimizer.zero_grad()
         
         # Generate negative samples for balanced loss
         B = int(batch_assignment.max().item() + 1)
-        num_pos = true_edge_index.shape[1]
+        num_pos = positive_edges.shape[1]
         
         if num_pos > 0:
             # Intra-batch negative sampling
@@ -29,10 +29,10 @@ class DiffusionTrainer:
             
             neg_edge_index = torch.stack([neg_u, neg_v], dim=0)
             
-            candidate_edges = torch.cat([true_edge_index, neg_edge_index], dim=1)
+            candidate_edges = torch.cat([positive_edges, neg_edge_index], dim=1)
             true_edge_labels = torch.cat([torch.ones(num_pos, device=self.device), torch.zeros(num_pos, device=self.device)])
         else:
-            candidate_edges = true_edge_index
+            candidate_edges = positive_edges
             true_edge_labels = torch.ones(0, device=self.device)
             
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -41,8 +41,11 @@ class DiffusionTrainer:
             edge_loss = torch.tensor(0.0, device=self.device)
             if len(edge_logits) > 0:
                 edge_loss = self.loss_fn.edge_loss_fn(edge_logits, true_edge_labels.float())
-            
-            loss = self.loss_fn.edge_weight * edge_loss
+                loss = self.loss_fn.edge_weight * edge_loss
+            else:
+                # Dummy loss to prevent DDP deadlock when candidate edges are empty
+                # Connects the loss to the model's parameters so backward() syncs properly
+                loss = sum(p.sum() for p in self.model.parameters() if p.requires_grad) * 0.0
             
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)
@@ -52,9 +55,9 @@ class DiffusionTrainer:
         
         return edge_loss.item(), out_flat.detach()
         
-    def val_step(self, x, noisy_edge_index, batch_assignment, t_expanded, true_edge_index):
+    def val_step(self, x, noisy_edge_index, batch_assignment, t_expanded, positive_edges):
         B = int(batch_assignment.max().item() + 1)
-        num_pos = true_edge_index.shape[1]
+        num_pos = positive_edges.shape[1]
         
         if num_pos > 0:
             counts = torch.bincount(batch_assignment)
@@ -67,10 +70,10 @@ class DiffusionTrainer:
             
             neg_edge_index = torch.stack([neg_u, neg_v], dim=0)
             
-            candidate_edges = torch.cat([true_edge_index, neg_edge_index], dim=1)
+            candidate_edges = torch.cat([positive_edges, neg_edge_index], dim=1)
             true_edge_labels = torch.cat([torch.ones(num_pos, device=self.device), torch.zeros(num_pos, device=self.device)])
         else:
-            candidate_edges = true_edge_index
+            candidate_edges = positive_edges
             true_edge_labels = torch.ones(0, device=self.device)
             
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):

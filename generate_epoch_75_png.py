@@ -2,12 +2,12 @@ import os
 import torch
 import matplotlib
 matplotlib.use('Agg')
-from utils import load_config
-from data_loader import get_dataloader
-from forward_diffusion import DiscreteGraphDiffusion
-from backward_diffusion import BackwardDiffusionModel
-from sequence_generator import SequenceGenerator
-from heuristic_evaluator import ValidityHeuristicEvaluator
+from utils.utils import load_config
+from data.data_loader import get_dataloader
+from models.forward_diffusion import DiscreteGraphDiffusion
+from models.backward_diffusion import BackwardDiffusionModel
+from models.sequence_generator import SequenceGenerator
+from models.heuristic_evaluator import ValidityHeuristicEvaluator
 from train import plot_full_diffusion_process
 
 def main():
