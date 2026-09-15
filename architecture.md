@@ -1,8 +1,33 @@
 # NeuroDiffusion Architecture
 
-This document outlines the architecture for the two primary generation models in the pipeline: the **Backward Diffusion Model** (for topological edge prediction) and the **Sequence Generator** (for generating the exact morphological sequences/coordinates).
+This document outlines the architecture for the four primary models in the NeuroDiffusion pipeline:
+1. **Forward Diffusion Model** (Edge corruption process)
+2. **Backward Diffusion Model** (Topological edge prediction)
+3. **Sequence Generator** (Morphological sequence generation)
+4. **Heuristic Evaluator** (Validity scoring)
 
-## 1. Backward Diffusion Model (Topology Reconstruction)
+---
+
+## 1. Forward Diffusion Model (Discrete Edge Corruption)
+
+The discrete forward diffusion process simulates the fragmentation of neuronal trees. It takes a fully connected graph (tree) and progressively drops edges over time $t$ according to a cosine or linear noise schedule. 
+
+```mermaid
+graph TD
+    %% Inputs
+    Edges[True Graph Edges 2, E] --> SampleDrop[Bernoulli Sampling: Drop Edges]
+    T[Timestep t] --> Schedule[Compute Alpha_bar_t]
+    
+    %% Processing
+    Schedule --> SampleDrop
+    SampleDrop --> OutputNoisy[Noisy/Fragmented Edges 2, E_noisy]
+    
+    style OutputNoisy fill:#f9f,stroke:#333,stroke-width:2px
+```
+
+---
+
+## 2. Backward Diffusion Model (Topology Reconstruction)
 
 The backward diffusion model is a specialized Graph Transformer. It takes disjoint, fragmented neuronal sub-trees (produced by the forward diffusion corruption) and uses global self-attention to exchange context between these fragments. It then predicts the probability of candidate edges to bridge the missing gaps.
 
@@ -35,7 +60,9 @@ graph TD
     style OutputContext fill:#f9f,stroke:#333,stroke-width:2px
 ```
 
-## 2. Sequence Generator (Morphology Generation)
+---
+
+## 3. Sequence Generator (Morphology Generation)
 
 The sequence generator acts as a continuous DDPM (Denoising Diffusion Probabilistic Model). Rather than predicting edges, it generates the exact 3D coordinates along a neuronal branch. It is conditioned on the graph context extracted from the Backward Diffusion Model.
 
@@ -68,6 +95,38 @@ graph TD
     style OutputType fill:#f9f,stroke:#333,stroke-width:2px
 ```
 
-## How they interact
-1. The **Backward Diffusion Model** evaluates a fragmented graph, predicts how it connects, and produces a highly descriptive `Graph Context Embedding` for those connected components.
-2. The **Sequence Generator** takes that `Graph Context Embedding` as its conditional input (`Context 1` and `Context 2`), ensuring that the 3D morphology it generates natively respects the overall topological structure of the neuronal tree.
+---
+
+## 4. Heuristic Evaluator (Validity Scoring)
+
+The Validity Heuristic Evaluator checks whether a generated morphological sequence correctly and biologically connects two sub-trees. It combines the contextual embeddings of the sub-trees, the sequence itself, and the diffusion timestep to produce a validity score.
+
+```mermaid
+graph TD
+    %% Inputs
+    T1[Context T1 B, CtxDim] --> ConcatAll
+    T2[Context T2 B, CtxDim] --> ConcatAll
+    PathC[Path Coords B, SeqLen, 3] --> ConcatPath
+    PathT[Path Types B, SeqLen, 3] --> ConcatPath
+    T[Timestep t] --> TimeMLP[Time MLP Sinusoidal]
+    
+    %% Processing
+    ConcatPath[Concat Coords + Types] --> BiLSTM[BiLSTM Path Encoder]
+    BiLSTM --> PathEmb[BiLSTM Path Embedding]
+    
+    PathEmb --> ConcatAll[Concatenate All Features]
+    TimeMLP --> ConcatAll
+    
+    ConcatAll --> Classifier[Classifier MLP with Dropout]
+    Classifier --> Logit[Validity Logit / Probability]
+    
+    style Logit fill:#f9f,stroke:#333,stroke-width:2px
+```
+
+---
+
+## Overall Pipeline Flow
+1. **Forward Diffusion Model** tears apart a complete neuronal graph.
+2. The **Backward Diffusion Model** evaluates this fragmented graph, predicts how it connects (Topology), and produces a highly descriptive `Graph Context Embedding` for those connected components.
+3. The **Sequence Generator** takes that `Graph Context Embedding` as its conditional input (`Context 1` and `Context 2`) and iteratively denoises a path to generate the 3D morphology between those sub-trees.
+4. The **Heuristic Evaluator** acts as a final filter, taking the generated path and the original context to reject biologically impossible or topologically invalid connections.
