@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import os
-from utils import load_config
+from utils.utils import load_config
 
 class SinusoidalPositionEmbeddings(nn.Module):
     def __init__(self, dim):

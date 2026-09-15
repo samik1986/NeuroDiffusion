@@ -10,13 +10,13 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from utils import load_config
-from data_loader import get_dataloader
-from forward_diffusion import DiscreteGraphDiffusion
-from backward_diffusion import BackwardDiffusionModel
-from sequence_generator import SequenceGenerator
-from heuristic_evaluator import ValidityHeuristicEvaluator
-from loss_functions import NeuroDiffusionLoss
+from utils.utils import load_config
+from data.data_loader import get_dataloader
+from models.forward_diffusion import DiscreteGraphDiffusion
+from models.backward_diffusion import BackwardDiffusionModel
+from models.sequence_generator import SequenceGenerator
+from models.heuristic_evaluator import ValidityHeuristicEvaluator
+from utils.loss_functions import NeuroDiffusionLoss
 
 from trainers.diffusion_trainer import DiffusionTrainer
 from trainers.generator_trainer import GeneratorTrainer

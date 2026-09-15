@@ -3,12 +3,12 @@ import torch
 import numpy as np
 import networkx as nx
 
-from utils import load_config
-from tree_utils import parse_swc_to_graph, separate_trees, find_nearest_neighbors
-from volume_utils import load_volume, evaluate_ridgeline_intensity
-from backward_diffusion import BackwardDiffusionModel
-from sequence_generator import SequenceGenerator
-from heuristic_evaluator import ValidityHeuristicEvaluator
+from utils.utils import load_config
+from utils.tree_utils import parse_swc_to_graph, separate_trees, find_nearest_neighbors
+from utils.volume_utils import load_volume, evaluate_ridgeline_intensity
+from models.backward_diffusion import BackwardDiffusionModel
+from models.sequence_generator import SequenceGenerator
+from models.heuristic_evaluator import ValidityHeuristicEvaluator
 
 def run_inference():
     print("Starting NeuroDiffusion Inference Pipeline...")

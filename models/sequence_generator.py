@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import os
-from utils import load_config
+from utils.utils import load_config
 
 class SinusoidalPositionEmbeddings(nn.Module):
     def __init__(self, dim):
@@ -133,8 +133,8 @@ class SequenceGenerator(nn.Module):
             # Predict noise
             noise_pred, type_logits = self.forward(x_t, t, t1_context, t2_context)
             
-            # Record intermediate state every 25 steps or at the end
-            if t_step % (num_timesteps // 4) == 0 or t_step == 0:
+            # Record intermediate state for 5 evenly spaced intervals to match the 5 subplots
+            if t_step in [num_timesteps - 1, (num_timesteps * 3 // 4) - 1, (num_timesteps * 2 // 4) - 1, (num_timesteps // 4) - 1, 0]:
                 history.append({
                     't': t_step,
                     'coords': x_t.clone()

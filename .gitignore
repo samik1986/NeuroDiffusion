@@ -3,5 +3,8 @@ __pycache__/
 *.tif
 *.swc
 *.pth
+*.log
+*.out
+*.txt
 .DS_Store
 output/
