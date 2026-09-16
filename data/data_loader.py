@@ -11,6 +11,10 @@ class SWCParser:
         
     def parse(self, ignore_soma=True):
         """Parses the SWC file, optionally ignoring soma (type 1) nodes."""
+        raw_nodes = {}
+        raw_edges = []
+        soma_ids = set()
+        
         with open(self.file_path, 'r') as f:
             for line in f:
                 line = line.strip()
@@ -27,18 +31,39 @@ class SWCParser:
                 radius = float(parts[5])
                 parent_id = int(parts[6])
                 
-                if ignore_soma and n_type == 1:
-                    continue
-                    
-                self.nodes[n_id] = {
+                raw_nodes[n_id] = {
                     'type': n_type,
                     'coord': np.array([x, y, z]),
                     'radius': radius,
                     'parent': parent_id
                 }
                 
-                if parent_id != -1 and parent_id in self.nodes:
-                    self.edges.append((parent_id, n_id))
+                if parent_id != -1:
+                    raw_edges.append((parent_id, n_id))
+                    
+        # Filter nodes
+        for n_id, node in raw_nodes.items():
+            if ignore_soma and node['type'] == 1:
+                soma_ids.add(n_id)
+            else:
+                self.nodes[n_id] = node
+                
+        # Reconstruct edges
+        soma_children = []
+        for u, v in raw_edges:
+            if u in self.nodes and v in self.nodes:
+                self.edges.append((u, v))
+            elif ignore_soma:
+                if u in soma_ids and v in self.nodes:
+                    soma_children.append(v)
+                elif v in soma_ids and u in self.nodes:
+                    soma_children.append(u)
+                    
+        # Stitch disjoint branches to keep the tree connected
+        if ignore_soma and len(soma_children) > 1:
+            root_child = soma_children[0]
+            for child in soma_children[1:]:
+                self.edges.append((root_child, child))
                     
         return self.nodes, self.edges
 
@@ -393,6 +418,7 @@ def get_dataloader(config, world_size=1, rank=0):
             collate_fn=custom_collate_fn,
             num_workers=num_workers,
             pin_memory=True,
+            persistent_workers=True if num_workers > 0 else False,
             multiprocessing_context=torch.multiprocessing.get_context('spawn') if num_workers > 0 else None
         )
         return train_loader, None
@@ -431,6 +457,7 @@ def get_dataloader(config, world_size=1, rank=0):
         collate_fn=custom_collate_fn,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
         multiprocessing_context=torch.multiprocessing.get_context('spawn') if num_workers > 0 else None
     )
     
@@ -442,6 +469,7 @@ def get_dataloader(config, world_size=1, rank=0):
         collate_fn=custom_collate_fn,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
         multiprocessing_context=torch.multiprocessing.get_context('spawn') if num_workers > 0 else None
     )
     

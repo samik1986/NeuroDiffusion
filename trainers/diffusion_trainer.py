@@ -7,7 +7,7 @@ class DiffusionTrainer:
         self.scheduler = scheduler
         self.loss_fn = loss_fn
         self.device = device
-        self.scaler = torch.amp.GradScaler('cuda')
+        self.scaler = torch.amp.GradScaler('cuda', enabled=False)
         
     def train_step(self, x, noisy_edge_index, batch_assignment, t_expanded, positive_edges):
         self.optimizer.zero_grad()
@@ -41,11 +41,28 @@ class DiffusionTrainer:
             edge_loss = torch.tensor(0.0, device=self.device)
             if len(edge_logits) > 0:
                 edge_loss = self.loss_fn.edge_loss_fn(edge_logits, true_edge_labels.float())
-                loss = self.loss_fn.edge_weight * edge_loss
+                
+                # --- Toplogical Cycle Penalty (Optimized for Speed) ---
+                pred_probs = torch.sigmoid(edge_logits)
+                N = x.shape[0]
+                
+                # A perfect tree has N - B edges. We penalize generating more edges than necessary.
+                noisy_edges = noisy_edge_index.shape[1] / 2.0
+                total_edges = noisy_edges + (pred_probs.sum() / 2.0)
+                target_edges = N - B
+                
+                tree_size_loss = torch.nn.functional.mse_loss(
+                    total_edges.to(torch.float32), 
+                    torch.tensor(target_edges, device=self.device, dtype=torch.float32)
+                )
+                
+                tree_weight = 0.5
+                
+                loss = self.loss_fn.edge_weight * edge_loss + tree_weight * tree_size_loss
             else:
                 # Dummy loss to prevent DDP deadlock when candidate edges are empty
-                # Connects the loss to the model's parameters so backward() syncs properly
-                loss = sum(p.sum() for p in self.model.parameters() if p.requires_grad) * 0.0
+                # Connects the loss to the model's output so backward() syncs properly inside DDP
+                loss = out_flat.sum() * 0.0
             
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)
@@ -82,5 +99,24 @@ class DiffusionTrainer:
             edge_loss = torch.tensor(0.0, device=self.device)
             if len(edge_logits) > 0:
                 edge_loss = self.loss_fn.edge_loss_fn(edge_logits, true_edge_labels.float())
-            
-        return edge_loss.item(), out_flat.detach(), candidate_edges, edge_logits.detach() if len(edge_logits) > 0 else edge_logits
+                
+                # --- Toplogical Cycle Penalty (Optimized for Speed) ---
+                pred_probs = torch.sigmoid(edge_logits)
+                N = x.shape[0]
+                
+                noisy_edges = noisy_edge_index.shape[1] / 2.0
+                total_edges = noisy_edges + (pred_probs.sum() / 2.0)
+                target_edges = N - B
+                
+                tree_size_loss = torch.nn.functional.mse_loss(
+                    total_edges.to(torch.float32), 
+                    torch.tensor(target_edges, device=self.device, dtype=torch.float32)
+                )
+                
+                tree_weight = 0.5
+                
+                loss = self.loss_fn.edge_weight * edge_loss + tree_weight * tree_size_loss
+            else:
+                loss = torch.tensor(0.0, device=self.device)
+                
+        return loss.item(), out_flat.detach(), candidate_edges.detach(), edge_logits.detach() if len(edge_logits) > 0 else edge_logits

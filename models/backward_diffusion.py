@@ -3,6 +3,7 @@ import torch.nn as nn
 import math
 import os
 from utils.utils import load_config
+from models.egnn import EGNN
 
 class TimestepEmbedding(nn.Module):
     def __init__(self, dim):
@@ -19,8 +20,10 @@ class TimestepEmbedding(nn.Module):
 
 class BackwardDiffusionModel(nn.Module):
     """
-    Graph Transformer for Backward Diffusion.
-    Takes disjoint neuron fragments and globally attends to them to predict missing edges.
+    EGNN + Transformer for Backward Diffusion.
+    Takes disjoint neuron fragments, extracts SE(3) invariant features via EGNN over local topology,
+    then globally attends to them via a standard Transformer to predict missing edges.
+    Fully Scale, Translation, and Rotation Invariant. Memory Efficient!
     """
     def __init__(self, config=None, in_dim=5):
         super().__init__()
@@ -33,15 +36,16 @@ class BackwardDiffusionModel(nn.Module):
             hidden_dim = bd_params.get('hidden_dim', hidden_dim)
             num_layers = bd_params.get('num_layers', num_layers)
             num_heads = bd_params.get('num_heads', num_heads)
-            in_dim = 3
             
-        self.node_mlp = nn.Linear(in_dim, hidden_dim)
         self.time_mlp = nn.Sequential(
             TimestepEmbedding(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim)
         )
+        
+        # We use EGNN over the *local* fragmented edges to extract geometry-aware invariant features
+        self.egnn = EGNN(in_node_dim=hidden_dim, hidden_dim=hidden_dim, out_node_dim=hidden_dim, num_layers=num_layers)
         
         # Transformer for global attention between fragmented sub-trees
         encoder_layer = nn.TransformerEncoderLayer(
@@ -52,9 +56,9 @@ class BackwardDiffusionModel(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        # Edge prediction head
+        # Edge prediction head (invariant to SE(3) and Scale since it uses invariant features h and normalized distance)
         self.edge_head = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(hidden_dim * 2 + 1, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, 1)
         )
@@ -70,79 +74,63 @@ class BackwardDiffusionModel(nn.Module):
             
         Returns:
             edge_logits: (E_cand,) predictions for each candidate edge
+            out_flat: (N, hidden) invariant context embeddings
         """
         device = x.device
         
-        h = self.node_mlp(x)
-        
-        # PyTorch Message Passing (Simple Graph Convolution) over the fragmented topology
-        if noisy_edge_index.shape[1] > 0:
-            src, dst = noisy_edge_index
-            messages = h[src]
-            aggr = torch.zeros_like(h)
-            aggr.scatter_add_(0, dst.unsqueeze(1).expand_as(messages), messages)
-            # Add self-loops / residual connection
-            h = h + aggr
-        
+        # 1. Initialize invariant node features with timestep embeddings
         t_emb = self.time_mlp(t)
-        h = h + t_emb[batch_idx]
+        h = t_emb[batch_idx] # (N, hidden_dim)
         
-        # Pad graphs for batched Transformer execution
-        B = int(batch_idx.max().item() + 1) if len(batch_idx) > 0 else 0
+        # 2. Extract invariant features from 3D geometry via EGNN over local topology (memory efficient O(E))
+        h, _ = self.egnn(h, x, noisy_edge_index)
         
-        counts = torch.bincount(batch_idx, minlength=B)
+        # 3. Global Self-Attention via Transformer (PyTorch optimized O(N^2) memory)
+        # Remap batch_idx to be contiguous to avoid empty padding rows which cause SDPA NaN gradients
+        unique_b, contiguous_batch_idx = torch.unique(batch_idx, return_inverse=True)
+        B_eff = len(unique_b)
+        counts = torch.bincount(contiguous_batch_idx, minlength=B_eff)
         max_nodes = counts.max().item() if len(counts) > 0 else 0
         
         if max_nodes == 0:
-            return torch.zeros(candidate_edges.shape[1], device=device)
+            return torch.zeros(candidate_edges.shape[1], device=device), h
             
-        padded_h = torch.zeros(B, max_nodes, h.size(-1), device=device, dtype=h.dtype)
-        padding_mask = torch.ones(B, max_nodes, dtype=torch.bool, device=device)
+        padded_h = torch.zeros(B_eff, max_nodes, h.size(-1), device=device, dtype=h.dtype)
+        padding_mask = torch.ones(B_eff, max_nodes, dtype=torch.bool, device=device)
         
-        # Fast vectorized flat to padded assignment
         cum_counts = torch.cat([torch.zeros(1, dtype=torch.long, device=device), torch.cumsum(counts, dim=0)])
-        seq_i = torch.arange(len(batch_idx), device=device) - cum_counts[batch_idx]
+        seq_i = torch.arange(len(contiguous_batch_idx), device=device) - cum_counts[contiguous_batch_idx]
         
-        padded_h[batch_idx, seq_i] = h
-        padding_mask[batch_idx, seq_i] = False
+        padded_h[contiguous_batch_idx, seq_i] = h
+        padding_mask[contiguous_batch_idx, seq_i] = False
             
-        # Global self-attention to exchange context between fragments
         out_padded = self.transformer(padded_h, src_key_padding_mask=padding_mask)
+        out_flat = out_padded[contiguous_batch_idx, seq_i]
         
-        # Fast vectorized retrieve flat features
-        out_flat = out_padded[batch_idx, seq_i]
+        # 4. Predict candidate edge logits
+        if candidate_edges.size(1) > 0:
+            src_nodes = out_flat[candidate_edges[0]]
+            dst_nodes = out_flat[candidate_edges[1]]
             
-        # Predict candidate edge logits
-        src_nodes = out_flat[candidate_edges[0]]
-        dst_nodes = out_flat[candidate_edges[1]]
-        
-        edge_pairs = torch.cat([src_nodes, dst_nodes], dim=-1)
-        edge_logits = self.edge_head(edge_pairs).squeeze(-1)
+            # Compute graph-level scale for Scale Invariance
+            b_counts = counts.unsqueeze(1).float().clamp(min=1)
+            mean_x = torch.zeros(B_eff, 3, device=device).scatter_add_(0, contiguous_batch_idx.unsqueeze(1).expand(-1, 3), x) / b_counts
+            var_x = torch.zeros(B_eff, 3, device=device).scatter_add_(0, contiguous_batch_idx.unsqueeze(1).expand(-1, 3), (x - mean_x[contiguous_batch_idx])**2) / b_counts
+            scale_sq = var_x.sum(dim=-1).clamp(min=1e-6) # (B_eff,)
+            
+            # Compute invariant relative distance
+            src_coords = x[candidate_edges[0]]
+            dst_coords = x[candidate_edges[1]]
+            sq_dist = torch.sum((src_coords - dst_coords)**2, dim=-1)
+            
+            # Normalize by graph scale for Scale Invariance
+            graph_ids = contiguous_batch_idx[candidate_edges[0]]
+            norm_sq_dist = sq_dist / scale_sq[graph_ids]
+            log_dist = torch.log1p(norm_sq_dist).unsqueeze(-1)
+            
+            edge_pairs = torch.cat([src_nodes, dst_nodes, log_dist], dim=-1)
+            edge_logits = self.edge_head(edge_pairs).squeeze(-1)
+        else:
+            edge_logits = torch.empty((0,), device=device)
         
         return edge_logits, out_flat
-
-if __name__ == '__main__':
-    print("Testing Backward Diffusion Graph Transformer...")
-    
-    config = None
-    if os.path.exists('config.yaml'):
-        config = load_config('config.yaml')
-        
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device} for backward diffusion operations")
-    
-    model = BackwardDiffusionModel(config=config).to(device)
-    
-    # Mock inputs
-    N = 10
-    B = 2
-    x = torch.rand(N, 3, device=device)
-    noisy_edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]], device=device)
-    batch_idx = torch.tensor([0,0,0,0,0, 1,1,1,1,1], device=device)
-    t = torch.tensor([25, 50], device=device)
-    candidate_edges = torch.tensor([[0, 2, 5, 8], [1, 4, 6, 9]], device=device)
-    
-    logits, context = model(x, noisy_edge_index, batch_idx, t, candidate_edges)
-    print(f"Predicted Edge Logits Shape: {logits.shape}")
-    print(f"Context Embeddings Shape: {context.shape}")
-    print(f"Logits output: {logits.detach().cpu().numpy()}")

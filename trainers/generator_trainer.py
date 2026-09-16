@@ -9,7 +9,7 @@ class GeneratorTrainer:
         self.loss_fn = loss_fn
         self.device = device
         self.num_timesteps = num_timesteps
-        self.scaler = torch.amp.GradScaler('cuda')
+        self.scaler = torch.amp.GradScaler('cuda', enabled=False)
         
         scale = 1000 / num_timesteps
         beta_start = scale * 0.0001
@@ -38,15 +38,8 @@ class GeneratorTrainer:
                 coord_loss = masked_noise_loss.sum() / coord_mask.sum().clamp(min=1)
                 
             type_loss = torch.tensor(0.0, device=self.device)
-            if type_mask.any():
-                flat_pred_types = pred_types.view(-1, 3)
-                flat_true_types = true_types.view(-1)
-                flat_mask = type_mask.view(-1)
-                raw_type_loss = self.loss_fn.type_loss_fn(flat_pred_types, flat_true_types)
-                masked_type_loss = raw_type_loss * flat_mask.float()
-                type_loss = masked_type_loss.sum() / flat_mask.sum().clamp(min=1)
-                
-            total_loss = (self.loss_fn.coord_weight * coord_loss) + (self.loss_fn.type_weight * type_loss)
+            # Type generation is disabled by user since we are generating structure irrespective of axons/dendrites
+            total_loss = coord_loss
             
         if total_loss > 0:
             self.scaler.scale(total_loss).backward()
@@ -77,13 +70,6 @@ class GeneratorTrainer:
                 coord_loss = masked_noise_loss.sum() / coord_mask.sum().clamp(min=1)
                 
             type_loss = torch.tensor(0.0, device=self.device)
-            if type_mask.any():
-                flat_pred_types = pred_types.view(-1, 3)
-                flat_true_types = true_types.view(-1)
-                flat_mask = type_mask.view(-1)
-                raw_type_loss = self.loss_fn.type_loss_fn(flat_pred_types, flat_true_types)
-                masked_type_loss = raw_type_loss * flat_mask.float()
-                type_loss = masked_type_loss.sum() / flat_mask.sum().clamp(min=1)
-            
+            # Type generation is disabled
         pred_x0 = (noisy_coords - torch.sqrt(1 - a_cp) * noise_pred) / torch.sqrt(a_cp)
         return coord_loss.item(), type_loss.item(), pred_x0.detach(), torch.softmax(pred_types.detach(), dim=-1), t

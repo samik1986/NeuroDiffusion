@@ -11,13 +11,40 @@ from train import plot_scatter_fast, plot_edges_fast
 import matplotlib.pyplot as plt
 import itertools
 
+def plot_edges_fast_probs(ax, x_np, u, v, probs, c='blue', linewidth=2.0):
+    for i in range(10):
+        mask = (probs >= i/10.0) & (probs <= (i+1)/10.0 if i == 9 else probs < (i+1)/10.0)
+        if not np.any(mask):
+            continue
+        u_bin, v_bin = u[mask], v[mask]
+        alpha = max(0.05, (i + 1) / 10.0)
+        plot_edges_fast(ax, x_np, u_bin, v_bin, c=c, alpha=alpha, linewidth=linewidth)
+
+def plot_edges_fast_probs(ax, x_np, u, v, probs, c='blue', linewidth=2.0):
+    for i in range(10):
+        mask = (probs >= i/10.0) & (probs <= (i+1)/10.0 if i == 9 else probs < (i+1)/10.0)
+        if not np.any(mask):
+            continue
+        u_bin, v_bin = u[mask], v[mask]
+        alpha = max(0.05, (i + 1) / 10.0)
+        plot_edges_fast(ax, x_np, u_bin, v_bin, c=c, alpha=alpha, linewidth=linewidth)
+
+def plot_edges_fast_probs(ax, x_np, u, v, probs, c='blue', linewidth=2.0):
+    for i in range(10):
+        mask = (probs >= i/10.0) & (probs <= (i+1)/10.0 if i == 9 else probs < (i+1)/10.0)
+        if not np.any(mask):
+            continue
+        u_bin, v_bin = u[mask], v[mask]
+        alpha = max(0.05, (i + 1) / 10.0)
+        plot_edges_fast(ax, x_np, u_bin, v_bin, c=c, alpha=alpha, linewidth=linewidth)
+
 def plot_reconnection(x, true_edges, noisy_edges, predicted_edges, save_path, epoch):
-    fig = plt.figure(figsize=(30, 10))
+    fig = plt.figure(figsize=(40, 10))
     fig.suptitle(f"Epoch {epoch} Reconnection Process", fontsize=16)
     x_np = x.cpu().numpy()
     
     # --- Plot 1: Original Graph ---
-    ax1 = fig.add_subplot(131, projection='3d')
+    ax1 = fig.add_subplot(141, projection='3d')
     plot_scatter_fast(ax1, x_np, c='black', s=5, alpha=0.5)
     if true_edges.shape[1] > 0:
         orig_u, orig_v = true_edges.cpu().numpy()
@@ -25,7 +52,7 @@ def plot_reconnection(x, true_edges, noisy_edges, predicted_edges, save_path, ep
     ax1.set_title("1. Original Clean Graph")
     
     # --- Plot 2: Corrupted Graph (Forward Diffusion) ---
-    ax2 = fig.add_subplot(132, projection='3d')
+    ax2 = fig.add_subplot(142, projection='3d')
     plot_scatter_fast(ax2, x_np, c='black', s=5, alpha=0.5)
     if true_edges.shape[1] > 0:
         orig_u, orig_v = true_edges.cpu().numpy()
@@ -36,18 +63,22 @@ def plot_reconnection(x, true_edges, noisy_edges, predicted_edges, save_path, ep
     ax2.set_title("2. Disconnected Subgraphs (After Forward Diffusion)")
     
     # --- Plot 3: Reconnected Graph (Backward Diffusion) ---
-    ax3 = fig.add_subplot(133, projection='3d')
+    ax3 = fig.add_subplot(143, projection='3d')
     plot_scatter_fast(ax3, x_np, c='black', s=5, alpha=0.5)
     
     # Plot surviving parts
     if noisy_edges.shape[1] > 0:
         corr_u, corr_v = noisy_edges.cpu().numpy()
-        plot_edges_fast(ax3, x_np, corr_u, corr_v, c='grey', alpha=0.5, linewidth=1.5)
+        plot_edges_fast(ax3, x_np, corr_u, corr_v, c='red', alpha=0.5, linewidth=1.5)
                      
     # Plot generated missing edges
     if predicted_edges.shape[1] > 0:
         pred_u, pred_v = predicted_edges.cpu().numpy()
-        plot_edges_fast(ax3, x_np, pred_u, pred_v, c='blue', linewidth=2.0)
+        print(f"Plotting {len(pred_u)} blue edges! First 5 u: {pred_u[:5]}, v: {pred_v[:5]}")
+        if pred_probs is not None:
+            plot_edges_fast_probs(ax3, x_np, pred_u, pred_v, pred_probs.cpu().float().numpy(), c='blue', linewidth=2.0)
+        else:
+            plot_edges_fast(ax3, x_np, pred_u, pred_v, c='blue', linewidth=5.0)
                      
     ax3.set_title("3. Model Reconnecting Subgraphs (Backward Diffusion)")
     plt.savefig(save_path, bbox_inches='tight')
@@ -107,7 +138,7 @@ def main():
     candidates = torch.tensor(list(itertools.combinations(u_nodes, 2)), device=device).T
 
     # Find all checkpoints
-    epochs = [100]
+    epochs = [3]
     
     if not epochs:
         print("No checkpoints found!")
@@ -136,6 +167,8 @@ def main():
             pred_mask_single = mask[predicted_edges[0]] & mask[predicted_edges[1]]
             predicted_edges_single = predicted_edges[:, pred_mask_single]
             predicted_edges_single = mapping[predicted_edges_single]
+            print(f"Num true edges: {true_edges_single.shape[1]}, Num noisy edges: {noisy_edges_single.shape[1]}")
+            print(f"Candidates shape: {candidates.shape}, Predicted edges shape: {predicted_edges.shape}, Mapped single shape: {predicted_edges_single.shape}")
             
             save_path = os.path.join(img_dir, f"epoch_{epoch}_backward_reconnection.png")
             plot_reconnection(x_single, true_edges_single, noisy_edges_single, predicted_edges_single, save_path, epoch)

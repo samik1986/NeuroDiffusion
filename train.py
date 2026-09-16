@@ -1,10 +1,15 @@
 import os
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+# Enable TensorFloat-32 (TF32) on Ampere/Hopper GPUs for massive float32 matmul speedups
+torch.set_float32_matmul_precision('high')
 from torch.utils.tensorboard import SummaryWriter
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -51,65 +56,74 @@ def plot_edges_fast(ax, x_np, u, v, c, alpha=1.0, linewidth=1.0):
     z_lines[2::3] = np.nan
     ax.plot(x_lines, y_lines, z_lines, c=c, alpha=alpha, linewidth=linewidth)
 
-def plot_tree_corruption(x, original_edges, corrupted_edges, save_path):
-    fig = plt.figure(figsize=(20, 10))
-    x_np = x.cpu().numpy()
-    
-    # --- Plot 1: Original Tree ---
-    ax1 = fig.add_subplot(121, projection='3d')
-    plot_scatter_fast(ax1, x_np, c='black', s=5, alpha=0.5)
-    
-    if original_edges.shape[1] > 0:
-        orig_u, orig_v = original_edges.cpu().numpy()
-        plot_edges_fast(ax1, x_np, orig_u, orig_v, c='lightgrey', alpha=0.8, linewidth=1.5)
-    ax1.set_title("Original Neuronal Tree")
-    
-    # --- Plot 2: Corrupted Tree ---
-    ax2 = fig.add_subplot(122, projection='3d')
-    plot_scatter_fast(ax2, x_np, c='black', s=5, alpha=0.5)
-    
-    # Plot original edges faintly in background
-    if original_edges.shape[1] > 0:
-        orig_u, orig_v = original_edges.cpu().numpy()
-        plot_edges_fast(ax2, x_np, orig_u, orig_v, c='lightgrey', alpha=0.2, linewidth=1.0)
-                     
-    # Plot corrupted edges (red)
-    if corrupted_edges.shape[1] > 0:
-        corr_u, corr_v = corrupted_edges.cpu().numpy()
-        plot_edges_fast(ax2, x_np, corr_u, corr_v, c='red', linewidth=2.0)
-                     
-    ax2.set_title("Forward Diffusion Tree Corruption")
-    plt.savefig(save_path, bbox_inches='tight')
-    plt.close(fig)
+def plot_edges_fast_probs(ax, x_np, u, v, probs, c='blue', linewidth=2.0):
+    # Bin probabilities into 10 buckets for fast plotting with varying alpha
+    for i in range(10):
+        mask = (probs >= i/10.0) & (probs <= (i+1)/10.0 if i == 9 else probs < (i+1)/10.0)
+        if not np.any(mask):
+            continue
+        
+        u_bin, v_bin = u[mask], v[mask]
+        alpha = max(0.05, (i + 1) / 10.0)  # Min alpha 0.05 so it's slightly visible
+        plot_edges_fast(ax, x_np, u_bin, v_bin, c=c, alpha=alpha, linewidth=linewidth)
 
-def plot_val_predictions(x, corrupted_edges, predicted_edges, save_path):
-    fig = plt.figure(figsize=(20, 10))
+def plot_reconnection(x, true_edges, noisy_edges, predicted_edges, save_path, pred_probs=None, inference_edges=None):
+    fig = plt.figure(figsize=(40, 10))
+    fig.suptitle(f"Reconnection Process", fontsize=16)
     x_np = x.cpu().numpy()
     
-    # --- Plot 1: Corrupted Tree ---
-    ax1 = fig.add_subplot(121, projection='3d')
+    # --- Plot 1: Original Graph ---
+    ax1 = fig.add_subplot(141, projection='3d')
     plot_scatter_fast(ax1, x_np, c='black', s=5, alpha=0.5)
+    if true_edges.shape[1] > 0:
+        orig_u, orig_v = true_edges.cpu().numpy()
+        plot_edges_fast(ax1, x_np, orig_u, orig_v, c='green', alpha=0.8, linewidth=1.5)
+    ax1.set_title("1. Original Clean Graph")
     
-    if corrupted_edges.shape[1] > 0:
-        corr_u, corr_v = corrupted_edges.cpu().numpy()
-        plot_edges_fast(ax1, x_np, corr_u, corr_v, c='red', linewidth=2.0)
-    ax1.set_title("Corrupted Val Graph")
-    
-    # --- Plot 2: Generated Graph ---
-    ax2 = fig.add_subplot(122, projection='3d')
+    # --- Plot 2: Corrupted Graph (Forward Diffusion) ---
+    ax2 = fig.add_subplot(142, projection='3d')
     plot_scatter_fast(ax2, x_np, c='black', s=5, alpha=0.5)
+    if true_edges.shape[1] > 0:
+        orig_u, orig_v = true_edges.cpu().numpy()
+        plot_edges_fast(ax2, x_np, orig_u, orig_v, c='lightgrey', alpha=0.2, linewidth=1.0)
+    if noisy_edges.shape[1] > 0:
+        corr_u, corr_v = noisy_edges.cpu().numpy()
+        plot_edges_fast(ax2, x_np, corr_u, corr_v, c='red', linewidth=2.0)
+    ax2.set_title("2. Disconnected Subgraphs (After Forward Diffusion)")
     
-    # Plot surviving parts (faintly)
-    if corrupted_edges.shape[1] > 0:
-        corr_u, corr_v = corrupted_edges.cpu().numpy()
-        plot_edges_fast(ax2, x_np, corr_u, corr_v, c='grey', alpha=0.5, linewidth=1.5)
+    # --- Plot 3: Reconnected Graph (Backward Diffusion) ---
+    ax3 = fig.add_subplot(143, projection='3d')
+    plot_scatter_fast(ax3, x_np, c='black', s=5, alpha=0.5)
+    
+    # Plot surviving parts
+    if noisy_edges.shape[1] > 0:
+        corr_u, corr_v = noisy_edges.cpu().numpy()
+        plot_edges_fast(ax3, x_np, corr_u, corr_v, c='red', alpha=0.5, linewidth=1.5)
                      
-    # Plot generated missing edges (blue)
+    # Plot generated missing edges
     if predicted_edges.shape[1] > 0:
         pred_u, pred_v = predicted_edges.cpu().numpy()
-        plot_edges_fast(ax2, x_np, pred_u, pred_v, c='blue', linewidth=2.0)
+        if pred_probs is not None:
+            plot_edges_fast_probs(ax3, x_np, pred_u, pred_v, pred_probs.cpu().float().numpy(), c='blue', linewidth=2.0)
+        else:
+            plot_edges_fast(ax3, x_np, pred_u, pred_v, c='blue', linewidth=2.0)
                      
-    ax2.set_title("Model Predicted Missing Edges")
+    ax3.set_title("3. Model Probabilities (Fading Alpha)")
+    
+    # --- Plot 4: Inference (Hard Threshold) ---
+    ax4 = fig.add_subplot(144, projection='3d')
+    plot_scatter_fast(ax4, x_np, c='black', s=5, alpha=0.5)
+    
+    if noisy_edges.shape[1] > 0:
+        corr_u, corr_v = noisy_edges.cpu().numpy()
+        plot_edges_fast(ax4, x_np, corr_u, corr_v, c='red', alpha=0.5, linewidth=1.5)
+        
+    if inference_edges is not None and inference_edges.shape[1] > 0:
+        inf_u, inf_v = inference_edges.cpu().numpy()
+        plot_edges_fast(ax4, x_np, inf_u, inf_v, c='blue', linewidth=2.0)
+        
+    ax4.set_title("4. Inference (Probability > 0.5)")
+        
     plt.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
 
@@ -272,7 +286,7 @@ def main_worker(rank, world_size, config):
             if skip_edges.item() > 0:
                 continue
                 
-            B = int(batch_assignment.max().item() + 1)
+            B = gt_coords.shape[0]
             t_batch = torch.randint(0, forward_diffusion.num_timesteps, (1,), device=device)
             noisy_edge_index, keep_mask = forward_diffusion.forward_sample(true_edge_index, t_batch)
             
@@ -290,9 +304,8 @@ def main_worker(rank, world_size, config):
                     true_edges_single = mapping[true_edges_single]
                     noisy_edges_single = mapping[noisy_edges_single]
                     
-                    save_path = os.path.join(img_dir, f"epoch_{epoch+1}_corruption.png")
-                    plot_tree_corruption(x_single, true_edges_single, noisy_edges_single, save_path)
-            
+                    # Save for unified plot during val
+                    pass
             # --- 1. Train Backward Diffusion ---
             dropped_edges = true_edge_index[:, ~keep_mask] if true_edge_index.shape[1] > 0 else true_edge_index
             diff_loss, context_emb = diff_trainer.train_step(
@@ -335,14 +348,17 @@ def main_worker(rank, world_size, config):
             if rank == 0:
                 writer.add_scalar('Loss/Gen_Coord', coord_loss, global_step)
             if rank == 0:
-                writer.add_scalar('Loss/Gen_Type', type_loss, global_step)
-            if rank == 0:
                 writer.add_scalar('Loss/Heuristic', eval_loss, global_step)
             
         diff_sch.step()
         gen_sch.step()
         eval_sch.step()
         
+        if rank == 0 and writer is not None:
+            writer.add_scalar('Epoch_Loss/Diffusion', epoch_diff_loss / max(len(train_loader), 1), epoch)
+            writer.add_scalar('Epoch_Loss/Gen_Coord', epoch_gen_coord / max(len(train_loader), 1), epoch)
+            writer.add_scalar('Epoch_Loss/Heuristic', epoch_eval_loss / max(len(train_loader), 1), epoch)
+            
         # Validation Loop
         diff_model.eval()
         gen_model.eval()
@@ -374,14 +390,19 @@ def main_worker(rank, world_size, config):
                 if skip_edges.item() > 0:
                     continue
                     
-                B = int(batch_assignment.max().item() + 1)
-                t_batch = torch.randint(0, forward_diffusion.num_timesteps, (1,), device=device)
+                B = gt_coords.shape[0]
+                if batch_idx == 0:
+                    t_batch = torch.full((1,), forward_diffusion.num_timesteps - 1, device=device, dtype=torch.long)
+                else:
+                    t_batch = torch.randint(0, forward_diffusion.num_timesteps, (1,), device=device)
                 
                 noisy_edge_index, keep_mask = forward_diffusion.forward_sample(true_edge_index, t_batch)
                 
                 if batch_idx == 0 and rank == 0:
                     
-                    mask = (batch_assignment == 0)
+                    import random
+                    random_b = random.randint(0, B - 1)
+                    mask = (batch_assignment == random_b)
                     node_indices = torch.where(mask)[0]
                     if len(node_indices) > 0:
                         x_single = x[mask]
@@ -393,9 +414,8 @@ def main_worker(rank, world_size, config):
                         mapping[node_indices] = torch.arange(len(node_indices), device=device)
                         true_edges_single = mapping[true_edges_single]
                         noisy_edges_single = mapping[noisy_edges_single]
-                        
-                        save_path = os.path.join(img_dir, f"epoch_{epoch+1}_val_corruption.png")
-                        plot_tree_corruption(x_single, true_edges_single, noisy_edges_single, save_path)
+                        # Save for unified plot
+                        pass
                     
                 dropped_edges = true_edge_index[:, ~keep_mask] if true_edge_index.shape[1] > 0 else true_edge_index
                 diff_loss, context_emb, cand_edges, edge_logits = diff_trainer.val_step(
@@ -404,18 +424,32 @@ def main_worker(rank, world_size, config):
                 val_diff_loss += diff_loss
                 
                 if batch_idx == 0 and rank == 0:
-                    # Filter candidate edges that were predicted as positive
+                    # Filter candidate edges to the single graph FIRST
                     if len(edge_logits) > 0:
-                        pred_mask = torch.sigmoid(edge_logits) > 0.5
-                        predicted_edges = cand_edges[:, pred_mask]
+                        cand_mask_single = mask[cand_edges[0]] & mask[cand_edges[1]]
+                        cand_edges_single = cand_edges[:, cand_mask_single]
+                        edge_logits_single = edge_logits[cand_mask_single]
                         
-                        # Filter to just the single graph we are plotting
-                        pred_mask_single = mask[predicted_edges[0]] & mask[predicted_edges[1]]
-                        predicted_edges_single = predicted_edges[:, pred_mask_single]
-                        predicted_edges_single = mapping[predicted_edges_single]
+                        pred_probs_single = torch.sigmoid(edge_logits_single)
+                        # Keep edges with at least 2% probability to visualize them fading
+                        pred_mask = pred_probs_single > 0.02
+                        inf_mask = pred_probs_single > 0.5
                         
-                        save_path_gen = os.path.join(img_dir, f"epoch_{epoch+1}_val_gen.png")
-                        plot_val_predictions(x_single, noisy_edges_single, predicted_edges_single, save_path_gen)
+                        if cand_edges_single.shape[1] > 0:
+                            predicted_edges = cand_edges_single[:, pred_mask]
+                            predicted_probs = pred_probs_single[pred_mask]
+                            inference_edges = cand_edges_single[:, inf_mask]
+                            
+                        else:
+                            predicted_edges = cand_edges_single
+                            predicted_probs = pred_probs_single
+                            inference_edges = cand_edges_single
+                            
+                        predicted_edges_single = mapping[predicted_edges]
+                        inference_edges_single = mapping[inference_edges]
+                        
+                        save_path_gen = os.path.join(img_dir, f"epoch_{epoch+1}_val_reconnection.png")
+                        plot_reconnection(x_single, true_edges_single, noisy_edges_single, predicted_edges_single, save_path_gen, pred_probs=predicted_probs, inference_edges=inference_edges_single)
 
                 
                 counts = torch.bincount(batch_assignment, minlength=B).clamp(min=1).unsqueeze(1).float()
@@ -467,13 +501,10 @@ def main_worker(rank, world_size, config):
         if rank == 0:
             writer.add_scalar('Val_Loss/Gen_Coord', val_gen_coord/max(len(val_loader), 1), epoch)
         if rank == 0:
-            writer.add_scalar('Val_Loss/Gen_Type', val_gen_type/max(len(val_loader), 1), epoch)
-        if rank == 0:
             writer.add_scalar('Val_Loss/Heuristic', val_eval_loss/max(len(val_loader), 1), epoch)
         
         print(f"==> Epoch [{epoch+1}/{epochs}] Diff: {epoch_diff_loss/len(train_loader):.4f} (Val {val_diff_loss/max(len(val_loader), 1):.4f}) | "
               f"GenC: {epoch_gen_coord/len(train_loader):.4f} (Val {val_gen_coord/max(len(val_loader), 1):.4f}) | "
-              f"GenT: {epoch_gen_type/len(train_loader):.4f} (Val {val_gen_type/max(len(val_loader), 1):.4f}) | "
               f"Eval: {epoch_eval_loss/len(train_loader):.4f} (Val {val_eval_loss/max(len(val_loader), 1):.4f})")
         
         if (epoch + 1) % save_every == 0 and rank == 0:
