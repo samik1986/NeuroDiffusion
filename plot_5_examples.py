@@ -12,34 +12,42 @@ from models.forward_diffusion import DiscreteGraphDiffusion
 from models.backward_diffusion import BackwardDiffusionModel
 from train import plot_scatter_fast, plot_edges_fast
 
-def plot_reconnection_2panel(x, true_edges, noisy_edges, predicted_edges, save_path, epoch, example_idx):
-    fig = plt.figure(figsize=(20, 10))
+def plot_reconnection_3panel(x, true_edges, noisy_edges, predicted_edges, save_path, epoch, example_idx):
+    fig = plt.figure(figsize=(30, 10))
     fig.suptitle(f"Epoch {epoch} - Training Example {example_idx}", fontsize=16)
     x_np = x.cpu().numpy()
     
-    # --- Plot 1: Corrupted Graph (Forward Diffusion) ---
-    ax1 = fig.add_subplot(121, projection='3d')
+    # --- Plot 1: Original Clean Graph ---
+    ax1 = fig.add_subplot(131, projection='3d')
     plot_scatter_fast(ax1, x_np, c='black', s=5, alpha=0.5)
+    if true_edges.shape[1] > 0:
+        orig_u, orig_v = true_edges.cpu().numpy()
+        plot_edges_fast(ax1, x_np, orig_u, orig_v, c='green', alpha=0.8, linewidth=1.5)
+    ax1.set_title("Original Clean Graph")
+
+    # --- Plot 2: Corrupted Graph (Forward Diffusion) ---
+    ax2 = fig.add_subplot(132, projection='3d')
+    plot_scatter_fast(ax2, x_np, c='black', s=5, alpha=0.5)
     if noisy_edges.shape[1] > 0:
         corr_u, corr_v = noisy_edges.cpu().numpy()
-        plot_edges_fast(ax1, x_np, corr_u, corr_v, c='red', linewidth=2.0)
-    ax1.set_title("Forward Diffusion (Disconnected Tree)")
+        plot_edges_fast(ax2, x_np, corr_u, corr_v, c='red', linewidth=2.0)
+    ax2.set_title("Forward Diffusion (Disconnected Tree)")
     
-    # --- Plot 2: Reconnected Graph (Old Inference / Backward Diffusion) ---
-    ax2 = fig.add_subplot(122, projection='3d')
-    plot_scatter_fast(ax2, x_np, c='black', s=5, alpha=0.5)
+    # --- Plot 3: Reconnected Graph (Old Inference / Backward Diffusion) ---
+    ax3 = fig.add_subplot(133, projection='3d')
+    plot_scatter_fast(ax3, x_np, c='black', s=5, alpha=0.5)
     
     # Plot surviving parts (red)
     if noisy_edges.shape[1] > 0:
         corr_u, corr_v = noisy_edges.cpu().numpy()
-        plot_edges_fast(ax2, x_np, corr_u, corr_v, c='red', alpha=0.5, linewidth=1.5)
+        plot_edges_fast(ax3, x_np, corr_u, corr_v, c='red', alpha=0.5, linewidth=1.5)
                      
     # Plot generated missing edges (blue)
     if predicted_edges.shape[1] > 0:
         pred_u, pred_v = predicted_edges.cpu().numpy()
-        plot_edges_fast(ax2, x_np, pred_u, pred_v, c='blue', linewidth=5.0)
+        plot_edges_fast(ax3, x_np, pred_u, pred_v, c='blue', linewidth=5.0)
                      
-    ax2.set_title("Backward Diffusion (Reconnected)")
+    ax3.set_title("Backward Diffusion (Reconnected)")
     plt.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
 
@@ -136,7 +144,7 @@ def main():
             predicted_edges_single = mapping[predicted_edges_single]
             
             save_path = os.path.join(img_dir, f"example_{i+1}_epoch_{epoch}.png")
-            plot_reconnection_2panel(x_single, true_edges_single, noisy_edges_single, predicted_edges_single, save_path, epoch, i+1)
+            plot_reconnection_3panel(x_single, true_edges_single, noisy_edges_single, predicted_edges_single, save_path, epoch, i+1)
             print(f"Generated {save_path}")
 
 if __name__ == '__main__':
