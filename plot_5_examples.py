@@ -37,15 +37,15 @@ def plot_reconnection_3panel(x, true_edges, noisy_edges, predicted_edges, save_p
     ax3 = fig.add_subplot(133, projection='3d')
     plot_scatter_fast(ax3, x_np, c='black', s=5, alpha=0.5)
     
-    # Plot surviving parts (red)
-    if noisy_edges.shape[1] > 0:
-        corr_u, corr_v = noisy_edges.cpu().numpy()
-        plot_edges_fast(ax3, x_np, corr_u, corr_v, c='red', alpha=0.5, linewidth=1.5)
-                     
     # Plot generated missing edges (blue)
     if predicted_edges.shape[1] > 0:
         pred_u, pred_v = predicted_edges.cpu().numpy()
-        plot_edges_fast(ax3, x_np, pred_u, pred_v, c='blue', linewidth=5.0)
+        plot_edges_fast(ax3, x_np, pred_u, pred_v, c='blue', linewidth=2.0)
+
+    # Plot surviving parts (red) over blue
+    if noisy_edges.shape[1] > 0:
+        corr_u, corr_v = noisy_edges.cpu().numpy()
+        plot_edges_fast(ax3, x_np, corr_u, corr_v, c='red', linewidth=2.0)
                      
     ax3.set_title("Backward Diffusion (Reconnected)")
     plt.savefig(save_path, bbox_inches='tight')
