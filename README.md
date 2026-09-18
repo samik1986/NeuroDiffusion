@@ -2,6 +2,23 @@
 
 NeuroDiffusion is a generative machine learning pipeline designed to reconstruct fragmented 3D neuronal topologies from SWC data. By framing the problem as a reversal of a fragmentation (diffusion) process, the system learns to probabilistically infer missing topological connections and synthesize the 3D biological coordinates bridging them.
 
+## Documentation Index
+
+The NeuroDiffusion project is comprehensively documented to explain both the mathematical theory and the software engineering architecture. Please refer to the following documents for deep dives:
+
+**Core Theory & Architecture:**
+- [Algorithm Formulation & Tuning Guide (`algo.md`)](./algo.md)
+- [High-Level Architecture (`architecture.md`)](./architecture.md)
+- [Layer-wise Unrolled Architecture (`model_arch.md`)](./model_arch.md)
+- [Loss Functions Formulation (`losses.md`)](./losses.md)
+- [Invariance Properties & Theory (`invariance.md`)](./invariance.md)
+
+**Module-Specific Documentation:**
+- [Models (`models/README.md`)](./models/README.md)
+- [Trainers (`trainers/README.md`)](./trainers/README.md)
+- [Inference Pipeline (`inference/README.md`)](./inference/README.md)
+- [Data Processing (`data/README.md`)](./data/README.md)
+- [Utilities (`utils/README.md`)](./utils/README.md)
 ## Repository Structure
 
 The codebase is organized into modular directories for maintainability. Please see the individual `README.md` in each folder for deep dives into their specific architectures:
