@@ -45,7 +45,7 @@ We frame this reconstruction as reversing a diffusion (fragmentation) process:
 ---
 
 ## Reconstructed Output Example
-![Reconstructed Topology](../output/examples/example_1_epoch_100.png)
+![Reconstructed Topology](assets/example_1_epoch_100.png)
 
 ---
 

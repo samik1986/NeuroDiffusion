@@ -49,5 +49,5 @@ graph LR
 ```
 
 ## Successfully Connected Neurons
-![Inference Output](../output/examples/example_3_epoch_100.png)
+![Inference Output](assets/example_3_epoch_100.png)
 

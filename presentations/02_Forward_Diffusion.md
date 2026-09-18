@@ -32,7 +32,7 @@ Where:
 ---
 
 ## Examples of Fragmented Topologies
-![Corrupted Trees](../output/examples/example_2_epoch_100.png)
+![Corrupted Trees](assets/example_2_epoch_100.png)
 
 ---
 
