@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>03_Backward_Diffusion</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<hr />
+<p>marp: true
+theme: default
+paginate: true</p>
+<hr />
+<h1>Step 2: Backward Diffusion</h1>
+<p><strong>Topological Edge Prediction</strong></p>
+<hr />
+<h2>The Objective</h2>
+<p>The Backward Diffusion Model is tasked with reversing the discrete corruption. 
+Given a set of disconnected sub-trees and a set of candidate edges between them, it predicts the binary probability $p_{uv}$ that an edge should exist between nodes $u$ and $v$.</p>
+<hr />
+<h2>Layer-wise Architecture: The Hybrid Model</h2>
+<p>The model is a hybrid combination of an <strong>EGNN</strong> (for local geometric features) and a <strong>Graph Transformer</strong> (for global context).</p>
+<ol>
+<li><strong>Time Embedding:</strong> <code>TimestepEmbedding(128) -&gt; Linear -&gt; SiLU -&gt; Linear</code></li>
+<li><strong>Local Message Passing:</strong> 4 unrolled <strong>EGNN Layers</strong>. Operates strictly on the fragmented input edges to extract SE(3) invariant node features.</li>
+<li><strong>Global Attention:</strong> 4 unrolled PyTorch <code>TransformerEncoder</code> layers (<code>nhead=4</code>, <code>dim_feedforward=512</code>). Shares context across the disconnected fragments globally.</li>
+<li><strong>Edge Head:</strong> <code>Linear(257, 128) -&gt; SiLU -&gt; Linear(128, 1)</code>.</li>
+</ol>
+<hr />
+<h2>Scale Invariance &amp; Feature Concatenation</h2>
+<p>To predict an edge between source $u$ and destination $v$, the model concatenates:
+- Source node invariant feature $h_u$
+- Destination node invariant feature $h_v$
+- <strong>Scale-Invariant Log Distance:</strong> 
+  $\text{log_dist} = \log(1 + \frac{||x_u - x_v||^2}{\text{Var}(X)})$</p>
+<p>Dividing the absolute gap distance by the spatial variance of the given graph ensures the model performs flawlessly on 5-micron scale graphs and 500-micron scale graphs alike.</p>
+<hr />
+<h2>Optimization: The Edge Loss</h2>
+<p>The model is optimized using <strong>Binary Cross-Entropy with Logits</strong> (<code>nn.BCEWithLogitsLoss</code>).</p>
+<p><strong>Intra-batch Negative Sampling:</strong> 
+During the DDP training loop, the trainer automatically generates topologically invalid (negative) candidate edges. The model must learn to classify true ground-truth edges (Label <code>1</code>) versus these aggressively sampled negative edges (Label <code>0</code>).</p>
+<hr />
+<h2>Target Leakage &amp; Laplacian PEs</h2>
+<p><strong>Critical Note:</strong> Laplacian Positional Encodings (<code>lap_pe</code>) were strictly excluded from this architecture. </p>
+<p>Providing eigenvectors allows Graph Transformers to "cheat" and memorize topologies directly from the spectral decomposition. By relying purely on EGNN message passing, the model is forced to learn actual <strong>3D structural branching rules</strong>.</p>
+</body>
+</html>

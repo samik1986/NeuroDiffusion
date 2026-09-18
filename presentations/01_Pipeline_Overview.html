@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>01_Pipeline_Overview</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<hr />
+<p>marp: true
+theme: default
+paginate: true</p>
+<hr />
+<h1>NeuroDiffusion: Pipeline Overview</h1>
+<p><strong>Generative Reconstruction of 3D Neuronal Topologies</strong></p>
+<hr />
+<h2>The Biological Problem</h2>
+<ul>
+<li><strong>Raw Data Reality:</strong> Biological <code>.swc</code> datasets trace 3D neurons, but they are frequently highly <strong>fragmented</strong> due to imaging artifacts, staining inconsistencies, and tracing errors.</li>
+<li><strong>The Consequence:</strong> A single biological neuron is represented as dozens of disconnected sub-trees (fragments) floating in 3D space.</li>
+<li><strong>The Goal:</strong> To mathematically infer the missing topological connections (edges) and synthesize the smooth 3D morphological sequence (coordinates) that bridges them.</li>
+</ul>
+<hr />
+<h2>The NeuroDiffusion Solution</h2>
+<p>We frame this reconstruction as reversing a diffusion (fragmentation) process:
+1. <strong>Forward Diffusion:</strong> Systematically destroy edges of pristine trees to simulate tracing errors.
+2. <strong>Backward Diffusion:</strong> Predict <em>which</em> fragments should connect (Topology).
+3. <strong>Sequence Generation:</strong> Synthesize <em>how</em> they connect in 3D space (Morphology).
+4. <strong>Heuristic Evaluation:</strong> Zero-shot validation against raw image intensity constraints.</p>
+<hr />
+<h2>Universal Invariances</h2>
+<p>The entire pipeline is built upon deep geometric invariances required for 3D biological data:
+- <strong>E(3) Invariance:</strong> Equivariant Graph Neural Networks (EGNNs) process nodes entirely via relative radial distances ($||x_i - x_j||^2$). The model is structurally blind to global translations and is perfectly invariant to 3D rotations/reflections.
+- <strong>Scale Invariance:</strong> Connections are scored using a normalized gap distance ($\text{distance}^2 / \text{graph_variance}$). Standard DDPM generation is done in a normalized bounding box $[-1, 1]$.
+- <strong>Permutation Invariance:</strong> The models utilize <code>scatter_add</code> for local processing and symmetric global attention, ensuring immunity to how the SWC text file is formatted or ordered.</p>
+<hr />
+<h2>Technical Architecture Stack</h2>
+<p>The codebase operates via orchestrated, modular PyTorch loops:
+- <strong>Models:</strong> Built on customized EGNNs, continuous DDPMs, and Transformer Encoders.
+- <strong>Trainers:</strong> Isolated AMP (Automatic Mixed Precision) and DDP (Distributed Data Parallel) optimization loops.
+- <strong>Zero-Shot Evaluators:</strong> CPU-Producer / Multi-GPU-Consumer sliding windows over massive TIFF volumes utilizing Frangi/Sato vesselness filtering.</p>
+</body>
+</html>
