@@ -41,8 +41,13 @@ $$ \text{Cost}_B(X) = - \frac{10}{|X|} \sum_{i} \text{Vesselness}(x_i) \cdot |\l
 
 ## End-to-End Inference Architecture
 
-Processing a 4GB TIFF volume requires VRAM-conscious engineering (`inference/main.py`):
+```mermaid
+graph LR
+    CPU[CPU Producer: Pre-computes Vesselness] --> Q[Thread-Safe Queue]
+    Q --> GPU[Multi-GPU Consumer: Predicts Connections]
+    GPU --> SWC[SWC Export: Maintains Parent Topologies]
+```
 
-- **CPU Producer:** A multi-threaded process loads overlapping sliding windows (e.g., $256 \times 256 \times 64$) into RAM and pre-computes Sato/Frangi Vesselness and Tangent volumes.
-- **Multi-GPU Consumer:** Concurrently evaluates candidate endpoints inside the window using the Sequence Generator and Evaluator.
-- **Topological Export:** Reconstructed connections are mapped back to micron-scale SWC graphs, crucially preserving exact parent-child topological links (rendering true continuous skeletons, not point clouds).
+## Successfully Connected Neurons
+![Inference Output](../output/examples/example_3_epoch_100.png)
+

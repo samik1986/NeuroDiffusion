@@ -35,9 +35,19 @@ for f in files:
 <meta charset="utf-8">
 <title>{name}</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({{startOnLoad:true}});</script>
 </head>
 <body>
 {html_text}
+<script>
+document.querySelectorAll('code.language-mermaid').forEach(function(el) {{
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    el.parentElement.replaceWith(div);
+}});
+</script>
 </body>
 </html>
 """

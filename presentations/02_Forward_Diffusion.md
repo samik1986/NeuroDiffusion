@@ -31,6 +31,11 @@ Where:
 
 ---
 
+## Examples of Fragmented Topologies
+![Corrupted Trees](../output/examples/example_2_epoch_100.png)
+
+---
+
 ## Hyperparameter Tuning: $\beta_{\text{end}}$
 
 **Parameter:** `forward_diffusion.beta_end`

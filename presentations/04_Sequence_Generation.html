@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title>04_Sequence_Generation</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true});</script>
 </head>
 <body>
 <hr />
@@ -25,21 +27,29 @@ paginate: true</p>
 - <strong>Output:</strong> A smooth, biologically plausible 3D curve tracing a neurite path.</p>
 <hr />
 <h2>Layer-wise Architecture: 1D-Chain EGNN</h2>
-<ol>
-<li><strong>Initialization:</strong> 
-   $h_0 = \text{TimeMLP}(t) + \text{ContextProj}(c_1 \oplus c_2) + \text{SinusoidalPos}(0..L)$</li>
-<li><strong>1D-Chain Path Encoding:</strong>
-   4 unrolled <strong>EGNN Layers</strong>. The nodes are connected as a 1D chain ($i \leftrightarrow i+1$). </li>
-<li><strong>Equivariant Noise Prediction:</strong>
-   The EGNN directly predicts the rotation-equivariant coordinate noise update: $\Delta x = x_{\text{out}} - x_t$.</li>
-<li><strong>Node Type Head:</strong>
-   Predicts invariant categorical intents: Continue (<code>0</code>), Branch (<code>1</code>), Terminate (<code>2</code>).</li>
-</ol>
+<pre><code class="language-mermaid">graph TD
+    X[Noisy Coords N, 3] --&gt; EGNN[1D-Chain EGNN]
+    T[Time Embed] --&gt; SumH[Sum Features]
+    Ctx[Context Embed] --&gt; SumH
+    Pos[Pos Embed] --&gt; SumH
+    SumH --&gt; EGNN
+
+    EGNN --&gt; Noise[Noise Prediction]
+    EGNN --&gt; Type[Node Type Logits]
+</code></pre>
 <hr />
 <h2>Optimization: Morphological Losses</h2>
 <p>The generation is optimized using two primary losses:
 - <strong>Coordinate Loss (Weight: 10.0):</strong> Masked Mean Squared Error (<code>nn.MSELoss</code>) over the predicted coordinate noise vs the added Gaussian noise. The heavy weight prioritizes smooth, accurate paths.
 - <strong>Node Type Loss (Weight: 0.5):</strong> Masked Cross-Entropy Loss for structural intents.</p>
 <p>Padding masks ensure that variable-length branches do not corrupt the loss gradient.</p>
+<script>
+document.querySelectorAll('code.language-mermaid').forEach(function(el) {
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    el.parentElement.replaceWith(div);
+});
+</script>
 </body>
 </html>

@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title>05_Heuristic_and_Inference</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true});</script>
 </head>
 <body>
 <hr />
@@ -37,11 +39,20 @@ paginate: true</p>
 </ul>
 <hr />
 <h2>End-to-End Inference Architecture</h2>
-<p>Processing a 4GB TIFF volume requires VRAM-conscious engineering (<code>inference/main.py</code>):</p>
-<ul>
-<li><strong>CPU Producer:</strong> A multi-threaded process loads overlapping sliding windows (e.g., $256 \times 256 \times 64$) into RAM and pre-computes Sato/Frangi Vesselness and Tangent volumes.</li>
-<li><strong>Multi-GPU Consumer:</strong> Concurrently evaluates candidate endpoints inside the window using the Sequence Generator and Evaluator.</li>
-<li><strong>Topological Export:</strong> Reconstructed connections are mapped back to micron-scale SWC graphs, crucially preserving exact parent-child topological links (rendering true continuous skeletons, not point clouds).</li>
-</ul>
+<pre><code class="language-mermaid">graph LR
+    CPU[CPU Producer: Pre-computes Vesselness] --&gt; Q[Thread-Safe Queue]
+    Q --&gt; GPU[Multi-GPU Consumer: Predicts Connections]
+    GPU --&gt; SWC[SWC Export: Maintains Parent Topologies]
+</code></pre>
+<h2>Successfully Connected Neurons</h2>
+<p><img alt="Inference Output" src="../output/examples/example_3_epoch_100.png" /></p>
+<script>
+document.querySelectorAll('code.language-mermaid').forEach(function(el) {
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    el.parentElement.replaceWith(div);
+});
+</script>
 </body>
 </html>

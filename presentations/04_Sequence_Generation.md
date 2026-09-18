@@ -28,14 +28,17 @@ The model functions as a continuous Denoising Diffusion Probabilistic Model.
 
 ## Layer-wise Architecture: 1D-Chain EGNN
 
-1. **Initialization:** 
-   $h_0 = \text{TimeMLP}(t) + \text{ContextProj}(c_1 \oplus c_2) + \text{SinusoidalPos}(0..L)$
-2. **1D-Chain Path Encoding:**
-   4 unrolled **EGNN Layers**. The nodes are connected as a 1D chain ($i \leftrightarrow i+1$). 
-3. **Equivariant Noise Prediction:**
-   The EGNN directly predicts the rotation-equivariant coordinate noise update: $\Delta x = x_{\text{out}} - x_t$.
-4. **Node Type Head:**
-   Predicts invariant categorical intents: Continue (`0`), Branch (`1`), Terminate (`2`).
+```mermaid
+graph TD
+    X[Noisy Coords N, 3] --> EGNN[1D-Chain EGNN]
+    T[Time Embed] --> SumH[Sum Features]
+    Ctx[Context Embed] --> SumH
+    Pos[Pos Embed] --> SumH
+    SumH --> EGNN
+    
+    EGNN --> Noise[Noise Prediction]
+    EGNN --> Type[Node Type Logits]
+```
 
 ---
 

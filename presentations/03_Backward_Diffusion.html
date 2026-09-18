@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title>03_Backward_Diffusion</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true});</script>
 </head>
 <body>
 <hr />
@@ -20,12 +22,17 @@ Given a set of disconnected sub-trees and a set of candidate edges between them,
 <hr />
 <h2>Layer-wise Architecture: The Hybrid Model</h2>
 <p>The model is a hybrid combination of an <strong>EGNN</strong> (for local geometric features) and a <strong>Graph Transformer</strong> (for global context).</p>
-<ol>
-<li><strong>Time Embedding:</strong> <code>TimestepEmbedding(128) -&gt; Linear -&gt; SiLU -&gt; Linear</code></li>
-<li><strong>Local Message Passing:</strong> 4 unrolled <strong>EGNN Layers</strong>. Operates strictly on the fragmented input edges to extract SE(3) invariant node features.</li>
-<li><strong>Global Attention:</strong> 4 unrolled PyTorch <code>TransformerEncoder</code> layers (<code>nhead=4</code>, <code>dim_feedforward=512</code>). Shares context across the disconnected fragments globally.</li>
-<li><strong>Edge Head:</strong> <code>Linear(257, 128) -&gt; SiLU -&gt; Linear(128, 1)</code>.</li>
-</ol>
+<pre><code class="language-mermaid">graph TD
+    X[Node Coordinates N, 3] --&gt; NodeMLP[Node MLP]
+    Edges[Noisy Edges 2, E] --&gt; EGNN[EGNN Layers]
+    NodeMLP --&gt; EGNN
+    EGNN --&gt; Pad[Pad Batches]
+    Pad --&gt; Trans[Transformer Encoder]
+    Trans --&gt; Unpad[Flatten]
+    Unpad --&gt; Ext[Extract Src/Dst]
+    Ext --&gt; Head[Edge Head]
+    Head --&gt; Output[Edge Logits]
+</code></pre>
 <hr />
 <h2>Scale Invariance &amp; Feature Concatenation</h2>
 <p>To predict an edge between source $u$ and destination $v$, the model concatenates:
@@ -43,5 +50,13 @@ During the DDP training loop, the trainer automatically generates topologically 
 <h2>Target Leakage &amp; Laplacian PEs</h2>
 <p><strong>Critical Note:</strong> Laplacian Positional Encodings (<code>lap_pe</code>) were strictly excluded from this architecture. </p>
 <p>Providing eigenvectors allows Graph Transformers to "cheat" and memorize topologies directly from the spectral decomposition. By relying purely on EGNN message passing, the model is forced to learn actual <strong>3D structural branching rules</strong>.</p>
+<script>
+document.querySelectorAll('code.language-mermaid').forEach(function(el) {
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    el.parentElement.replaceWith(div);
+});
+</script>
 </body>
 </html>

@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title>02_Forward_Diffusion</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true});</script>
 </head>
 <body>
 <hr />
@@ -29,10 +31,21 @@ paginate: true</p>
 - $E_0$ is the pristine ground-truth edge set.
 - $\bar{\alpha}<em _text_end="\text{end">t$ decays from $1.0 \to (1.0 - \beta</em>)$ according to a predefined schedule (e.g., linear or cosine).}</p>
 <hr />
+<h2>Examples of Fragmented Topologies</h2>
+<p><img alt="Corrupted Trees" src="../output/examples/example_2_epoch_100.png" /></p>
+<hr />
 <h2>Hyperparameter Tuning: $\beta_{\text{end}}$</h2>
 <p><strong>Parameter:</strong> <code>forward_diffusion.beta_end</code>
 - This controls the terminal probability of an edge being dropped.
 - <strong>High <code>beta_end</code>:</strong> Results in severely fragmented trees with massive gaps. Exposes the model to very hard examples during training, forcing it to learn long-range topological rules.
 - <strong>Low <code>beta_end</code>:</strong> Useful for fine-tuning on mostly-intact datasets where fragments are closely clustered.</p>
+<script>
+document.querySelectorAll('code.language-mermaid').forEach(function(el) {
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    el.parentElement.replaceWith(div);
+});
+</script>
 </body>
 </html>

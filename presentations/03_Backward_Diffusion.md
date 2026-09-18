@@ -20,10 +20,18 @@ Given a set of disconnected sub-trees and a set of candidate edges between them,
 
 The model is a hybrid combination of an **EGNN** (for local geometric features) and a **Graph Transformer** (for global context).
 
-1. **Time Embedding:** `TimestepEmbedding(128) -> Linear -> SiLU -> Linear`
-2. **Local Message Passing:** 4 unrolled **EGNN Layers**. Operates strictly on the fragmented input edges to extract SE(3) invariant node features.
-3. **Global Attention:** 4 unrolled PyTorch `TransformerEncoder` layers (`nhead=4`, `dim_feedforward=512`). Shares context across the disconnected fragments globally.
-4. **Edge Head:** `Linear(257, 128) -> SiLU -> Linear(128, 1)`.
+```mermaid
+graph TD
+    X[Node Coordinates N, 3] --> NodeMLP[Node MLP]
+    Edges[Noisy Edges 2, E] --> EGNN[EGNN Layers]
+    NodeMLP --> EGNN
+    EGNN --> Pad[Pad Batches]
+    Pad --> Trans[Transformer Encoder]
+    Trans --> Unpad[Flatten]
+    Unpad --> Ext[Extract Src/Dst]
+    Ext --> Head[Edge Head]
+    Head --> Output[Edge Logits]
+```
 
 ---
 

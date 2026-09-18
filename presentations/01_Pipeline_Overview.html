@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title>01_Pipeline_Overview</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true});</script>
 </head>
 <body>
 <hr />
@@ -21,12 +23,25 @@ paginate: true</p>
 <li><strong>The Goal:</strong> To mathematically infer the missing topological connections (edges) and synthesize the smooth 3D morphological sequence (coordinates) that bridges them.</li>
 </ul>
 <hr />
+<h2>The Mathematical Formulation</h2>
+<p>The transition probability for an edge existing at timestep $t$ is given by:</p>
+<p>$$ q(E_t | E_0) = \text{Bernoulli}(E_t; \bar{\alpha}_t \cdot E_0) $$</p>
+<p>Where:
+- $E_0$ is the pristine ground-truth edge set.
+- $\bar{\alpha}<em _text_end="\text{end">t$ decays from $1.0 \to (1.0 - \beta</em>)$ according to a predefined schedule (e.g., linear or cosine).}</p>
+<hr />
+<h2>Examples of Fragmented Topologies</h2>
+<p><img alt="Corrupted Trees" src="../output/examples/example_2_epoch_100.png" /></p>
+<hr />
 <h2>The NeuroDiffusion Solution</h2>
 <p>We frame this reconstruction as reversing a diffusion (fragmentation) process:
 1. <strong>Forward Diffusion:</strong> Systematically destroy edges of pristine trees to simulate tracing errors.
 2. <strong>Backward Diffusion:</strong> Predict <em>which</em> fragments should connect (Topology).
 3. <strong>Sequence Generation:</strong> Synthesize <em>how</em> they connect in 3D space (Morphology).
 4. <strong>Heuristic Evaluation:</strong> Zero-shot validation against raw image intensity constraints.</p>
+<hr />
+<h2>Reconstructed Output Example</h2>
+<p><img alt="Reconstructed Topology" src="../output/examples/example_1_epoch_100.png" /></p>
 <hr />
 <h2>Universal Invariances</h2>
 <p>The entire pipeline is built upon deep geometric invariances required for 3D biological data:
@@ -39,5 +54,21 @@ paginate: true</p>
 - <strong>Models:</strong> Built on customized EGNNs, continuous DDPMs, and Transformer Encoders.
 - <strong>Trainers:</strong> Isolated AMP (Automatic Mixed Precision) and DDP (Distributed Data Parallel) optimization loops.
 - <strong>Zero-Shot Evaluators:</strong> CPU-Producer / Multi-GPU-Consumer sliding windows over massive TIFF volumes utilizing Frangi/Sato vesselness filtering.</p>
+<hr />
+<h2>Design Choices: Hyperparameters</h2>
+<p>The <code>config.yaml</code> is meticulously designed to balance VRAM limits against biological scale:</p>
+<ul>
+<li><strong><code>dataloader.max_nodes</code> (VRAM constraint):</strong> Biologically, neurons can have 100,000+ nodes. We cap this at 2000 per fragment during training to guarantee O(N^2) Transformer attention doesn't cause GPU Out-of-Memory (OOM) errors.</li>
+<li><strong><code>inference.max_joining_distance</code> (Complexity constraint):</strong> Searching all possible $N \times N$ fragment pairings is computationally explosive. Capping the search radius to 50 microns leverages local sparsity, reducing candidate generation from $O(N^2)$ to $O(N \log N)$ via KD-Trees.</li>
+<li><strong><code>forward_diffusion.beta_end</code> (Curriculum Design):</strong> Dictates the ratio of dropped edges. A high beta_end forces the model to learn long-range bridging (hard examples), while a low beta_end focuses on fine-tuning local gaps.</li>
+</ul>
+<script>
+document.querySelectorAll('code.language-mermaid').forEach(function(el) {
+    var div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = el.textContent;
+    el.parentElement.replaceWith(div);
+});
+</script>
 </body>
 </html>
