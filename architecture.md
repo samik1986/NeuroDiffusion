@@ -29,19 +29,25 @@ graph TD
 
 ## 2. Backward Diffusion Model (Topology Reconstruction)
 
-The backward diffusion model is a specialized Graph Transformer. It takes disjoint, fragmented neuronal sub-trees (produced by the forward diffusion corruption) and uses global self-attention to exchange context between these fragments. It then predicts the probability of candidate edges to bridge the missing gaps.
+The backward diffusion model is a hybrid EGNN and Graph Transformer. It takes disjoint, fragmented neuronal sub-trees (produced by the forward diffusion corruption), uses an Equivariant Graph Neural Network (EGNN) to extract local SE(3) invariant features, and then uses global self-attention to exchange context between these fragments. It then predicts the probability of candidate edges to bridge the missing gaps.
+
+### Layer-wise Details:
+- **`time_mlp`**: `TimestepEmbedding(128) -> Linear(128, 128) -> SiLU -> Linear(128, 128)`
+- **`egnn`**: Equivariant Graph Neural Network (`num_layers=4`, `hidden_dim=128`). Operates locally on the fragmented input edges to extract SE(3) invariant node features.
+- **`transformer`**: PyTorch `TransformerEncoder` (`num_layers=4`, `nhead=4`, `dim_feedforward=512`). Operates globally across the nodes.
+- **`edge_head`**: `Linear(257, 128) -> SiLU -> Linear(128, 1)`. Takes concatenated source, destination, and scale-invariant log distance to predict logits.
 
 ```mermaid
 graph TD
     %% Inputs
     X[Node Coordinates N, 3] --> NodeMLP[Node MLP]
-    Edges[Noisy/Fragmented Edges 2, E] --> MP[Message Passing over Sub-trees]
+    Edges[Noisy/Fragmented Edges 2, E] --> EGNN[EGNN: Local SE 3 Invariant Message Passing]
     T[Timestep t] --> TimeMLP[Time MLP Sinusoidal]
     Candidates[Candidate Edges 2, E_cand] --> EdgeHead
 
     %% Processing
-    NodeMLP --> MP
-    MP --> AddTime
+    NodeMLP --> EGNN
+    EGNN --> AddTime
     TimeMLP --> AddTime[Add Time Embedding]
     
     AddTime --> Pad[Pad to Batches for Transformer]
@@ -64,7 +70,13 @@ graph TD
 
 ## 3. Sequence Generator (Morphology Generation)
 
-The sequence generator acts as a continuous DDPM (Denoising Diffusion Probabilistic Model). Rather than predicting edges, it generates the exact 3D coordinates along a neuronal branch. It is conditioned on the graph context extracted from the Backward Diffusion Model.
+The sequence generator acts as a continuous DDPM (Denoising Diffusion Probabilistic Model). Rather than predicting edges, it generates the exact 3D coordinates along a neuronal branch. It uses a 1D-Chain EGNN to denoise the path equivariantly, conditioned on the graph context extracted from the Backward Diffusion Model.
+
+### Layer-wise Details:
+- **`time_mlp`**: `SinusoidalPositionEmbeddings(128) -> Linear(128, 256) -> GELU -> Linear(256, 128)`
+- **`context_proj`**: `Linear(256, 128)`. Compresses the concatenated T1 and T2 contexts.
+- **`egnn`**: `EGNN` (`num_layers=4`, `hidden_dim=128`). Operates as a 1D-Chain sequential EGNN to predict rotation-equivariant coordinate noise $\Delta x$.
+- **`type_head`**: `Linear(128, 3)`. Predicts categorical node types (Continue, Branch, Terminate).
 
 ```mermaid
 graph TD
@@ -82,11 +94,11 @@ graph TD
     CtxProj --> AddAll
     PosEmb[1D Positional Embedding] --> AddAll[Sum Representations: h = x + t + ctx + pos]
     
-    AddAll --> Trans[Transformer Encoder Layer]
+    AddAll --> EGNN[1D-Chain EGNN Layer]
     
     %% Prediction Heads
-    Trans --> NoiseHead[Noise Prediction Head]
-    Trans --> TypeHead[Node Type Head]
+    EGNN --> NoiseHead[Noise Prediction Head]
+    EGNN --> TypeHead[Node Type Head]
     
     NoiseHead --> OutputNoise[Predicted Noise epsilon_theta]
     TypeHead --> OutputType[Predicted Node Types]
@@ -101,6 +113,12 @@ graph TD
 
 The Validity Heuristic Evaluator checks whether a generated morphological sequence correctly and biologically connects two sub-trees. It combines the contextual embeddings of the sub-trees, the sequence itself, and the diffusion timestep to produce a validity score.
 
+### Layer-wise Details:
+- **`time_mlp`**: `SinusoidalPositionEmbeddings(128) -> Linear(128, 128) -> SiLU`
+- **`type_proj`**: `Linear(3, 128)`. Projects initial one-hot path types into hidden features.
+- **`egnn`**: `EGNN` (`num_layers=2`, `hidden_dim=128`). Acts as a spatial path encoder over the generated sequence.
+- **`classifier`**: `Linear(512, 256) -> BatchNorm1d(256) -> SiLU -> Dropout(0.2) -> Linear(256, 128) -> SiLU -> Linear(128, 1)`. Outputs the final scalar predicting the structural neural gap.
+
 ```mermaid
 graph TD
     %% Inputs
@@ -111,8 +129,8 @@ graph TD
     T[Timestep t] --> TimeMLP[Time MLP Sinusoidal]
     
     %% Processing
-    ConcatPath[Concat Coords + Types] --> BiLSTM[BiLSTM Path Encoder]
-    BiLSTM --> PathEmb[BiLSTM Path Embedding]
+    ConcatPath[Concat Coords + Types] --> EGNN[1D-Chain EGNN Path Encoder]
+    EGNN --> PathEmb[EGNN Path Embedding]
     
     PathEmb --> ConcatAll[Concatenate All Features]
     TimeMLP --> ConcatAll
@@ -130,3 +148,34 @@ graph TD
 2. The **Backward Diffusion Model** evaluates this fragmented graph, predicts how it connects (Topology), and produces a highly descriptive `Graph Context Embedding` for those connected components.
 3. The **Sequence Generator** takes that `Graph Context Embedding` as its conditional input (`Context 1` and `Context 2`) and iteratively denoises a path to generate the 3D morphology between those sub-trees.
 4. The **Heuristic Evaluator** acts as a final filter, taking the generated path and the original context to reject biologically impossible or topologically invalid connections.
+
+---
+
+## 5. Volumetric Inference Pipeline
+
+The end-to-end inference script (`inference/main.py`) integrates all trained models with raw biological image data.
+
+```mermaid
+graph TD
+    %% Inputs
+    RawVol[Raw TIFF Volume] --> SlidingWin[Sliding Window Loader]
+    SlidingWin --> CPUProd[CPU Producer: Computes Vesselness & Tangent]
+    
+    SWC[Fragmented SWC] --> GraphParser[SWC to Graph Parser]
+    GraphParser --> ExtractEps[Extract Endpoints]
+    
+    %% Processing
+    CPUProd --> Queue[Task Queue]
+    ExtractEps --> Queue
+    
+    Queue --> GPU1[GPU Consumer 1]
+    Queue --> GPU2[GPU Consumer 2]
+    
+    %% GPU Consumer logic
+    GPU1 --> ContextGen[Generate Local Contexts]
+    ContextGen --> ConnectBatch[Sequence Generator: Batch Connect]
+    ConnectBatch --> EvalBatch[Zero-Shot Evaluator: Neural + Intensity Cost]
+    
+    EvalBatch --> Merge[Merge Reconstructed Paths]
+    Merge --> SWCExport[Export Reconstructed SWC with Topology]
+```

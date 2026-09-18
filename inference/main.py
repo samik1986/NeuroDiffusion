@@ -43,7 +43,8 @@ def export_swc(G, new_edges, out_path, voxel_res):
             pos = G.nodes[node]['pos'] * scale
             r = G.nodes[node]['radius']
             t = G.nodes[node]['type_id']
-            f.write(f"{node} {t} {pos[0]:.4f} {pos[1]:.4f} {pos[2]:.4f} {r:.4f} -1\n")
+            parent = G.nodes[node].get('parent', -1)
+            f.write(f"{node} {t} {pos[0]:.4f} {pos[1]:.4f} {pos[2]:.4f} {r:.4f} {parent}\n")
             visited.add(node)
             max_id = max(max_id, node)
             

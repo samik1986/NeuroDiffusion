@@ -58,7 +58,7 @@ inference:
   raw_volume_path: "/mnt/diskg9-3/NeuroGramLM/F0046_multichannel_cmle_ch03.tif"
   input_swc_path: "/mnt/diskg9-3/NeuroGramLM/skeletons_connected_new.swc"
   voxel_resolution: [0.1102, 0.1102, 0.5] # X, Y, Z in microns
-  max_joining_distance: 10.0 # maximum search radius in microns
+  max_joining_distance: 1000.0 # maximum search radius in microns
 
 # Output Parameters
 output:

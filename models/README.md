@@ -21,14 +21,14 @@ This directory contains the core neural network architectures for the NeuroDiffu
 ### 3. `sequence_generator.py` (Sequence Generator Model)
 **Role:** Generates continuous 3D spatial coordinates along the connected topologies.
 **Architecture:**
-- Uses a standard Continuous Denoising Diffusion Probabilistic Model (DDPM) wrapped around a Transformer Encoder.
+- Uses a continuous Denoising Diffusion Probabilistic Model (DDPM) wrapped around a 1D-Chain Equivariant Graph Neural Network (EGNN).
 - Employs Sinusoidal Positional Embeddings to denote the sequential order of branch nodes.
 - At inference/generation, starts with $N(0, I)$ Gaussian noise and denoises it conditioned on the topological `context_emb` from the Backward Diffusion Model.
 
 ### 4. `heuristic_evaluator.py` (Validity Evaluator)
 **Role:** Evaluates whether a generated continuous path physically intersects with existing geometry in the volume.
 **Architecture:**
-- A Bi-directional LSTM that processes generated paths and outputs an overlap penalty score to discourage mathematically valid but physically impossible (colliding) structures.
+- A 1D-Chain EGNN that processes generated paths and outputs an overlap penalty score to discourage mathematically valid but physically impossible (colliding) structures.
 
 ## Assumptions
 - **Target Leakage Avoidance:** The models here do *not* receive ground-truth Laplacian Positional Encodings (`lap_pe`), forcing them to learn true topological rules through Message Passing rather than reading "cheat codes" from eigenvectors.

@@ -6,5 +6,6 @@ __pycache__/
 *.log
 *.out
 *.txt
+training_output.log
 .DS_Store
 output/

@@ -6,7 +6,7 @@ NeuroDiffusion is a generative machine learning pipeline designed to reconstruct
 
 The codebase is organized into modular directories for maintainability. Please see the individual `README.md` in each folder for deep dives into their specific architectures:
 
-- `models/`: The core neural networks, including the Graph Convolutional **Backward Diffusion Model**, the Transformer-based **Sequence Generator**, the **Validity Heuristic Evaluator**, and the **Discrete Forward Diffusion** noise engine.
+- `models/`: The core neural networks, including the hybrid EGNN-Transformer **Backward Diffusion Model**, the EGNN-based **Sequence Generator**, the **Validity Heuristic Evaluator**, and the **Discrete Forward Diffusion** noise engine.
 - `trainers/`: Isolated PyTorch optimization loops utilizing Automatic Mixed Precision (AMP) and DDP.
 - `data/`: Custom PyTorch DataLoaders, coordinate normalization, and dataset preprocessing scripts for raw `.swc` files.
 - `utils/`: Custom BCE/MSE loss formulations, `networkx` topological tree manipulations, and biological 3D volume (TIFF) ridgeline intensity evaluations.
@@ -22,7 +22,7 @@ The **Backward Diffusion Model** learns to reverse this discrete fragmentation. 
 **Assumption**: Target leakage is heavily guarded against; ground-truth Laplacians (`lap_pe`) are explicitly excluded so the model must learn *geometric* structural rules rather than memorizing eigendecompositions.
 
 ### 3. Sequence Generation (Coordinate Regression)
-Once the Backward model predicts *that* two fragments should connect, the **Sequence Generator** predicts *how*. A continuous DDPM is used to synthesize a smooth 3D trajectory connecting the fragments. Starting from pure $N(0, I)$ Gaussian noise, a deep Transformer network denoises the coordinate sequence, conditioned on the topological structural embeddings from the Backward model.
+Once the Backward model predicts *that* two fragments should connect, the **Sequence Generator** predicts *how*. A continuous DDPM is used to synthesize a smooth 3D trajectory connecting the fragments. Starting from pure $N(0, I)$ Gaussian noise, a deep 1D-Chain EGNN network denoises the coordinate sequence, conditioned on the topological structural embeddings from the Backward model.
 
 ### 4. Heuristic Volume Validation (Inference)
 During live inference, simply generating a mathematical curve is not enough. The **Validity Evaluator** combined with `volume_utils` cross-references the synthesized 3D path against the raw biological TIFF volume. If the generated path does not align with high-intensity biological ridgelines (actual neurites), the connection is rejected.
@@ -61,8 +61,15 @@ python3 train.py
 *Note: The trainer will automatically spawn DDP processes via `torch.multiprocessing` if multiple GPUs are detected.*
 Training progress images (corrupted topologies vs. predicted connections) will be saved to `output/corrupted_disjoint_trees/` every epoch.
 
+**Resuming Training:**
+If you need to resume training from a specific checkpoint (e.g., epoch 100), you can use the dedicated resuming script which restores optimizer states and automatically appends to existing TensorBoard logs:
+```bash
+python3 resume_train.py
+```
+
 ### 4. Inference
 To run inference on a fragmented `.swc` and reconnect it using the trained models and a raw image volume:
 ```bash
-python3 inference.py
+python3 -m inference.main
 ```
+The inference pipeline utilizes a highly optimized **CPU-Producer / Multi-GPU-Consumer** sliding window architecture to process arbitrarily large biological TIFF volumes. It connects sub-trees probabilistically and maps generated topologies precisely back to micron-scale SWC graphs, preserving original topological parent definitions.

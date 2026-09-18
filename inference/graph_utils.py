@@ -15,7 +15,7 @@ def parse_swc_to_graph(swc_path):
                 n, type_id, x, y, z, radius, parent = parts
                 n = int(n)
                 parent = int(parent)
-                G.add_node(n, pos=np.array([float(z), float(y), float(x)]), type_id=int(type_id), radius=float(radius))
+                G.add_node(n, pos=np.array([float(z), float(y), float(x)]), type_id=int(type_id), radius=float(radius), parent=parent)
                 if parent != -1:
                     G.add_edge(n, parent)
     return G
