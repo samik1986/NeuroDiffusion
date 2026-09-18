@@ -43,6 +43,9 @@ paginate: true</p>
 - <strong>Coordinate Loss (Weight: 10.0):</strong> Masked Mean Squared Error (<code>nn.MSELoss</code>) over the predicted coordinate noise vs the added Gaussian noise. The heavy weight prioritizes smooth, accurate paths.
 - <strong>Node Type Loss (Weight: 0.5):</strong> Masked Cross-Entropy Loss for structural intents.</p>
 <p>Padding masks ensure that variable-length branches do not corrupt the loss gradient.</p>
+<hr />
+<h2>Example: Generated 3D Sequences</h2>
+<p><img alt="Generated Morphologies" src="assets/example_5_epoch_100.png" /></p>
 <script>
 document.querySelectorAll('code.language-mermaid').forEach(function(el) {
     var div = document.createElement('div');

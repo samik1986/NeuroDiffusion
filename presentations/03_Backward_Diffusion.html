@@ -47,6 +47,9 @@ Given a set of disconnected sub-trees and a set of candidate edges between them,
 <p><strong>Intra-batch Negative Sampling:</strong> 
 During the DDP training loop, the trainer automatically generates topologically invalid (negative) candidate edges. The model must learn to classify true ground-truth edges (Label <code>1</code>) versus these aggressively sampled negative edges (Label <code>0</code>).</p>
 <hr />
+<h2>Example: Model Predictions</h2>
+<p><img alt="Predicted Connections" src="assets/example_4_epoch_100.png" /></p>
+<hr />
 <h2>Target Leakage &amp; Laplacian PEs</h2>
 <p><strong>Critical Note:</strong> Laplacian Positional Encodings (<code>lap_pe</code>) were strictly excluded from this architecture. </p>
 <p>Providing eigenvectors allows Graph Transformers to "cheat" and memorize topologies directly from the spectral decomposition. By relying purely on EGNN message passing, the model is forced to learn actual <strong>3D structural branching rules</strong>.</p>

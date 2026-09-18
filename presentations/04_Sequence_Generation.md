@@ -49,3 +49,9 @@ The generation is optimized using two primary losses:
 - **Node Type Loss (Weight: 0.5):** Masked Cross-Entropy Loss for structural intents.
 
 Padding masks ensure that variable-length branches do not corrupt the loss gradient.
+
+---
+
+## Example: Generated 3D Sequences
+![Generated Morphologies](assets/example_5_epoch_100.png)
+

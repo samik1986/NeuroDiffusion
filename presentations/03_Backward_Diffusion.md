@@ -56,6 +56,11 @@ During the DDP training loop, the trainer automatically generates topologically 
 
 ---
 
+## Example: Model Predictions
+![Predicted Connections](assets/example_4_epoch_100.png)
+
+---
+
 ## Target Leakage & Laplacian PEs
 
 **Critical Note:** Laplacian Positional Encodings (`lap_pe`) were strictly excluded from this architecture. 
